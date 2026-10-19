@@ -7,6 +7,7 @@ import (
 
 	adktool "google.golang.org/adk/v2/tool"
 
+	piagent "github.com/dimetron/pi-go/internal/agent"
 	"github.com/dimetron/pi-go/internal/extension"
 )
 
@@ -46,6 +47,11 @@ type kagentHTTPTool struct {
 type kagentCompiledConfig struct {
 	Agent struct {
 		HTTPTools []kagentHTTPTool `json:"http_tools"`
+		// Instruction is the AgentTemplate's systemPrompt, compiled by the
+		// controller. It is the only channel through which a BYO runtime
+		// receives the prompt a user wrote in the template: the Harness spec
+		// carries no prompt, and no config file does either.
+		Instruction string `json:"instruction"`
 	} `json:"agent"`
 }
 
@@ -113,4 +119,53 @@ func kagentServerName(rawURL string) string {
 		return seg
 	}
 	return trimmed
+}
+
+// kagentInstructionFromEnv returns the AgentTemplate's systemPrompt as the
+// controller compiled it, or "" when none is configured.
+//
+// Precedence, and why: an explicit --system flag or PI_SYSTEM is an operator
+// overriding the deployment, so it wins and this returns "". Only when neither
+// is set does the template's prompt apply. Without this fallback a kagent
+// harness ignores the prompt a user wrote in the AgentTemplate entirely and
+// runs pi-go's built-in default instead — verified against a live cluster,
+// where the agent quoted the built-in text rather than the template's.
+func kagentInstructionFromEnv(getenv func(string) string) string {
+	if getenv == nil {
+		getenv = os.Getenv
+	}
+	raw := strings.TrimSpace(getenv(kagentConfigEnv))
+	if raw == "" {
+		return ""
+	}
+	var cfg kagentCompiledConfig
+	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(cfg.Agent.Instruction)
+}
+
+// resolveInstruction returns the system prompt for a session.
+//
+// Precedence: an explicit --system / PI_SYSTEM override, then the prompt the
+// kagent controller compiled from the AgentTemplate, then pi-go's built-in.
+// The middle step is gated on KagentTools because an ACP editor backend is not
+// a kagent harness: the variable's presence in its environment must not replace
+// the instruction its user configured.
+//
+// Omitting the middle step is the bug this exists to prevent. A BYO harness
+// receives no prompt from the Harness spec and none from a config file, so
+// without it the template's systemPrompt is silently discarded and the agent
+// runs pi-go's built-in text instead — verified against a live cluster, where
+// the agent quoted the built-in prompt rather than the template's.
+func resolveInstruction(rt RuntimeConfig, getenv func(string) string) string {
+	if rt.System != "" {
+		return rt.System
+	}
+	if rt.KagentTools {
+		if fromTemplate := kagentInstructionFromEnv(getenv); fromTemplate != "" {
+			return fromTemplate
+		}
+	}
+	return piagent.LoadInstruction(piagent.SystemInstruction)
 }

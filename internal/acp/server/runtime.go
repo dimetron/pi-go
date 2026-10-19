@@ -189,10 +189,7 @@ func initPiSessionState(ctx context.Context, rt RuntimeConfig, turn PromptTurn) 
 		return nil, err
 	}
 
-	instruction := rt.System
-	if instruction == "" {
-		instruction = piagent.LoadInstruction(piagent.SystemInstruction)
-	}
+	instruction := resolveInstruction(rt, os.Getenv)
 
 	ag, err := piagent.New(piagent.Config{
 		Model:                llm,

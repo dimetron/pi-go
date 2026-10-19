@@ -114,3 +114,88 @@ func TestKagentServerName(t *testing.T) {
 		}
 	}
 }
+
+// The template's systemPrompt is the only way a BYO harness receives the prompt
+// a user wrote — the Harness spec carries none and no config file does either.
+// Without this the run silently falls back to pi-go's built-in instruction,
+// which is exactly the bug this covers.
+func TestKagentInstructionFromEnv(t *testing.T) {
+	getenv := func(v string) func(string) string {
+		return func(k string) string {
+			if k == kagentConfigEnv {
+				return v
+			}
+			return ""
+		}
+	}
+	if got := kagentInstructionFromEnv(getenv(kagentConfigFixture)); got != "You are kagent-gh." {
+		t.Errorf("instruction = %q, want the compiled template prompt", got)
+	}
+	if got := kagentInstructionFromEnv(getenv("")); got != "" {
+		t.Errorf("unset config should yield \"\", got %q", got)
+	}
+	if got := kagentInstructionFromEnv(getenv("{not json")); got != "" {
+		t.Errorf("malformed config should yield \"\", got %q", got)
+	}
+	if got := kagentInstructionFromEnv(getenv(`{"agent":{"http_tools":[]}}`)); got != "" {
+		t.Errorf("config without an instruction should yield \"\", got %q", got)
+	}
+}
+
+// An explicit override outranks the template: an operator setting --system or
+// PI_SYSTEM must not be overridden by a deployment's AgentTemplate.
+func TestInstructionPrecedence(t *testing.T) {
+	withTemplate := func(string) string { return kagentConfigFixture }
+	noTemplate := func(string) string { return "" }
+
+	// The built-in prompt carries a runtime-environment preamble whose content
+	// depends on the process environment, so these cases assert the contract
+	// (template used or not) rather than comparing whole strings.
+	const templatePrompt = "You are kagent-gh."
+	cases := []struct {
+		name     string
+		rt       RuntimeConfig
+		env      func(string) string
+		wantTpl  bool
+		wantText string
+	}{
+		{"explicit wins over template", RuntimeConfig{System: "explicit", KagentTools: true}, withTemplate, false, "explicit"},
+		{"template used when no explicit", RuntimeConfig{KagentTools: true}, withTemplate, true, ""},
+		{"builtin when no template", RuntimeConfig{KagentTools: true}, noTemplate, false, ""},
+		// An ACP editor backend is not a kagent harness, so the variable's
+		// presence alone must not replace its instruction.
+		{"acp backend ignores template", RuntimeConfig{KagentTools: false}, withTemplate, false, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := resolveInstruction(tc.rt, tc.env)
+			if tc.wantText != "" {
+				if got != tc.wantText {
+					t.Errorf("got %q, want %q", got, tc.wantText)
+				}
+				return
+			}
+			if tc.wantTpl {
+				if got != templatePrompt {
+					t.Errorf("expected the template prompt, got %q", truncate(got, 80))
+				}
+				return
+			}
+			// Built-in fallback: must not be the template prompt, and must be set.
+			if got == "" {
+				t.Error("expected a non-empty instruction")
+			}
+			if got == templatePrompt {
+				t.Error("template prompt leaked into a context that must not use it")
+			}
+		})
+	}
+}
+
+// truncate keeps a failure message readable when the value is a whole prompt.
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
+}
