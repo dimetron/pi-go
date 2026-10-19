@@ -199,3 +199,36 @@ func truncate(s string, n int) string {
 	}
 	return s[:n] + "…"
 }
+
+// A nil getenv means "read the real environment", which is how production calls
+// the loaders. Covering it keeps the production call path exercised rather than
+// only the injected-function path the other tests use.
+func TestKagentLoadersNilGetenvUseProcessEnv(t *testing.T) {
+	t.Setenv(kagentConfigEnv, kagentConfigFixture)
+
+	if got := kagentInstructionFromEnv(nil); got != "You are kagent-gh." {
+		t.Errorf("instruction via nil getenv = %q, want the compiled prompt", got)
+	}
+	if got := kagentMCPToolsetsFromEnv(nil); len(got) != 3 {
+		t.Errorf("toolsets via nil getenv = %d, want 3", len(got))
+	}
+
+	t.Setenv(kagentConfigEnv, "")
+	if got := kagentInstructionFromEnv(nil); got != "" {
+		t.Errorf("instruction with unset env = %q, want empty", got)
+	}
+	if got := kagentMCPToolsetsFromEnv(nil); got != nil {
+		t.Errorf("toolsets with unset env = %d, want nil", len(got))
+	}
+}
+
+// A URL whose every path segment is a skip marker has no capability name to
+// borrow; the trimmed URL is the honest fallback rather than an empty name.
+func TestKagentServerName_AllSegmentsSkipped(t *testing.T) {
+	if got := kagentServerName("readonly"); got != "readonly" {
+		t.Errorf("kagentServerName(readonly) = %q, want the fallback", got)
+	}
+	if got := kagentServerName("mcp/"); got != "mcp" {
+		t.Errorf("kagentServerName(mcp/) = %q, want mcp", got)
+	}
+}
