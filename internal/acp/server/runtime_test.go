@@ -453,3 +453,36 @@ func TestBuildToolsetsFromCfgKagentToolsWithoutController(t *testing.T) {
 		t.Errorf("got %v, want no toolset without a controller URL", ts)
 	}
 }
+
+// The MCP servers an AgentTemplate declares reach a harness only through the
+// compiled KAGENT_CONFIG_JSON, so buildToolsetsFromCfg — not just the parser —
+// must surface them. This asserts the wiring: if the append in
+// buildToolsetsFromCfg is dropped, the parser tests still pass and the harness
+// silently loses every declared tool.
+func TestBuildToolsetsFromCfgKagentMCPTools(t *testing.T) {
+	t.Setenv("KAGENT_API_URL", "")
+	t.Setenv(kagentConfigEnv, kagentConfigFixture)
+
+	ts := buildToolsetsFromCfg(config.Config{}, true)
+	names := map[string]bool{}
+	for _, s := range ts {
+		names[s.Name()] = true
+	}
+	for _, want := range []string{"pull_requests", "repos", "kagent-tools.kagent:8084"} {
+		if !names[want] {
+			t.Errorf("compiled MCP server %q missing from harness toolset %v", want, names)
+		}
+	}
+}
+
+// An editor's ACP backend has no kagent controller and must not acquire MCP
+// servers from a variable that happens to be present in its environment.
+func TestBuildToolsetsFromCfgKagentMCPToolsOffForACP(t *testing.T) {
+	t.Setenv(kagentConfigEnv, kagentConfigFixture)
+
+	for _, s := range buildToolsetsFromCfg(config.Config{}, false) {
+		if s.Name() == "pull_requests" || s.Name() == "repos" {
+			t.Errorf("an ACP session was given the compiled kagent MCP server %q", s.Name())
+		}
+	}
+}

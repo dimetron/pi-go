@@ -13,7 +13,7 @@
 #
 # The release workflow renders this on every v* tag and attaches the result to
 # the release as kagent-manifests.yaml, pinned to the digest it just pushed.
-apiVersion: kagent.dev/v1alpha3
+apiVersion: api.kagent.dev/v1alpha3
 kind: Harness
 metadata:
   name: ${PI_GO_NAME}
@@ -35,12 +35,12 @@ spec:
       name: ${PI_GO_WORKER_POOL}
     snapshotPolicy:
       location: ${PI_GO_SNAPSHOT_LOCATION}
-  allowedAgentTemplates:
-    selector:
-      matchLabels:
-        runtime: ${PI_GO_NAME}
+  # NOTE: no agent-template gating lives here. HarnessSpec has no such field on
+  # a v1alpha3 controller (an earlier `allowedAgentTemplates` selector was
+  # rejected with "unknown field"), and template->harness binding is expressed
+  # on the Agent's spec.harnessRef, which each Agent sets explicitly.
 ${PI_GO_ENV_BLOCK}---
-apiVersion: kagent.dev/v1alpha3
+apiVersion: api.kagent.dev/v1alpha3
 kind: AgentTemplate
 metadata:
   name: ${PI_GO_NAME}
@@ -54,3 +54,34 @@ spec:
   systemPrompt: |
     You are pi-go, a helpful coding and Kubernetes assistant.
     Use tools carefully and explain actions briefly.
+---
+# Egress for the MCP servers an AgentTemplate may declare. A BYO runtime gets
+# its credentials from the compiler as KAGENT_ENV[...] placeholders inside
+# KAGENT_CONFIG_JSON; the value is substituted at the egress gateway and never
+# enters the sandbox, so this policy is what actually authorises the call.
+#
+# The policy is inert on its own: nothing references it until an Agent lists it
+# in spec.egressPolicyRefs.
+apiVersion: api.kagent.dev/v1alpha3
+kind: EgressPolicy
+metadata:
+  name: ${PI_GO_EGRESS_NAME}
+  namespace: ${PI_GO_NAMESPACE}
+spec:
+  destinations:
+  # GitHub MCP, served by the Copilot API. The credential is the one kagent
+  # injects as a placeholder, named here by Secret so the gateway can resolve
+  # it at request time.
+  - origin: https://api.githubcopilot.com
+    authentication:
+      header: Authorization
+      secretKeyRef:
+        name: ${PI_GO_GITHUB_SECRET}
+        key: Authorization
+  # Plain HTTPS origins the GitHub tools follow links to. No credential: these
+  # carry no secret and only need to be reachable.
+  - origin: https://github.com
+  - origin: https://api.github.com
+  - origin: https://raw.githubusercontent.com
+  - origin: https://codeload.github.com
+  - origin: https://objects.githubusercontent.com
