@@ -97,3 +97,35 @@ func TestOllamaCloudSnapshotCoversAPI(t *testing.T) {
 		t.Error("embedded ollama-cloud peak table is empty")
 	}
 }
+
+// TestOllamaCloudCostVersionedSibling pins that a versioned model resolves to
+// its own rates and not to a shorter-named sibling.
+//
+// minimax-m3.1-flash and minimax-m3 share a prefix, and the lookup is
+// prefix-based, so "minimax-m3" would win for "minimax-m3.1-flash" — but the
+// two are priced differently (0.15/0.60 against 0.60/2.40). The longest
+// prefix is the one that has to win, and this is the case that proves it: the
+// shorter name is a prefix of the longer one, which is the only ordering
+// where a naive first-match would charge the wrong rate.
+func TestOllamaCloudCostVersionedSibling(t *testing.T) {
+	pm, ok := OllamaCloudCost("minimax-m3.1-flash")
+	if !ok {
+		t.Fatal("OllamaCloudCost(minimax-m3.1-flash) not found")
+	}
+	if pm.Input != 0.15 || pm.Output != 0.60 {
+		t.Errorf("OllamaCloudCost(minimax-m3.1-flash) = %v/%v, want 0.15/0.6", pm.Input, pm.Output)
+	}
+	if pm.CacheRead != 0.015 {
+		t.Errorf("OllamaCloudCost(minimax-m3.1-flash) CacheRead = %v, want 0.015", pm.CacheRead)
+	}
+	// The shorter sibling keeps its own rates: the entry that won above must
+	// not have been the only one, and minimax-m3 must not inherit the flash
+	// rates either.
+	pm, ok = OllamaCloudCost("minimax-m3")
+	if !ok {
+		t.Fatal("OllamaCloudCost(minimax-m3) not found")
+	}
+	if pm.Input != 0.60 || pm.Output != 2.40 {
+		t.Errorf("OllamaCloudCost(minimax-m3) = %v/%v, want 0.6/2.4", pm.Input, pm.Output)
+	}
+}

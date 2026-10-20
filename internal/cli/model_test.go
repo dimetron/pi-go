@@ -434,6 +434,12 @@ func TestModelPriceOllamaCloud(t *testing.T) {
 	if got := modelPrice("ollama", "gemma4:31b-cloud"); got != "$0.14/$0.40 per 1M" {
 		t.Errorf("modelPrice(ollama, gemma4:31b-cloud) = %q, want $0.14/$0.40 per 1M", got)
 	}
+	// A versioned model whose name contains a dot and a digit: the tag strip
+	// has to leave "minimax-m3.1-flash" intact, and the price lookup has to
+	// pick it over the shorter "minimax-m3" it shares a prefix with.
+	if got := modelPrice("ollama", "minimax-m3.1-flash:cloud"); got != "$0.15/$0.60 per 1M" {
+		t.Errorf("modelPrice(ollama, minimax-m3.1-flash:cloud) = %q, want $0.15/$0.60 per 1M", got)
+	}
 	// A cloud-tagged model absent from the snapshot shows no price.
 	if got := modelPrice("ollama", "nonexistent-model:cloud"); got != "" {
 		t.Errorf("modelPrice(ollama, nonexistent-model:cloud) = %q, want empty", got)
@@ -462,6 +468,7 @@ func TestOllamaCloudPriceKey(t *testing.T) {
 		{"deepseek-v4-pro:0813-cloud", "deepseek-v4-pro:0813"},
 		{"gemma4:31b-cloud", "gemma4:31b"},
 		{"mistral-large-3:675b-cloud", "mistral-large-3:675b"},
+		{"minimax-m3.1-flash:cloud", "minimax-m3.1-flash"},
 		{"qwen3.5:397b", "qwen3.5:397b"}, // no cloud tag: untouched
 	}
 	for _, tt := range cases {
