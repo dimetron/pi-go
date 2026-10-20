@@ -231,6 +231,7 @@ func TestContextWindowSizeForAgentGatewayCloudModels(t *testing.T) {
 		"glm-5.2:cloud":                976_000,
 		"glm-5.3:cloud":                1_048_576,
 		"glm-5.3-flash:cloud":          1_000_000,
+		"minimax-m3.1-flash:cloud":     1_000_000,
 		"minimax-m3:cloud":             512_000,
 		"gpt-oss:120b-cloud":           131_072,
 		"kimi-k3:cloud":                1_048_576,

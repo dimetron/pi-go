@@ -16,7 +16,7 @@ Last updated: 2026-09-22
 | [Google Gemini](#google-gemini) | 43 | `GEMINI_API_KEY` |
 | [Mistral](#mistral) | 34 | `MISTRAL_API_KEY` |
 | [xAI](#xai) | 7 | `XAI_API_KEY` |
-| [Ollama](#ollama) | 12 | local daemon; no key needed |
+| [Ollama](#ollama) | 13 | local daemon; no key needed |
 | [OpenRouter](#openrouter) | 445 | `OPENROUTER_API_KEY` |
 | [Agentgateway](#agentgateway) | 25 | local gateway |
 | [Azure](#azure) | 31 deployments | `AZUREOPENAI_API_KEY`; names are per-subscription |
@@ -285,7 +285,7 @@ API key: `XAI_API_KEY`.
 | grok-4.20-0309-reasoning | 2026-03-09 | $1.25/$2.50 |
 | grok-4.20-multi-agent-0309 | 2026-03-09 | $1.25/$2.50 |
 
-## Ollama — 12 models
+## Ollama — 13 models
 
 Local daemon, plus Ollama Cloud (`*:cloud` tags). No API key for local models.
 
@@ -302,6 +302,7 @@ Local daemon, plus Ollama Cloud (`*:cloud` tags). No API key for local models.
 | glm-5.3-flash:cloud | $0.15/$0.50 | 1.05M | completion, thinking, tools, vision |
 | glm-5.3:cloud | $1.40/$4.40 | 1.05M | completion, thinking, tools |
 | kimi-k3:cloud | $3.00/$15.00 | 1.05M | completion, thinking, tools, vision |
+| minimax-m3.1-flash:cloud | $0.15/$0.60 | 1.00M | completion, thinking, tools, vision |
 | minimax-m3:cloud | $0.60/$2.40 | 524K | completion, thinking, tools, vision |
 
 ## OpenRouter — 445 models

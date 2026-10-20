@@ -157,6 +157,7 @@
     "kimi-k3:cloud": 1048576,
     "minimax-m2.5:cloud": 204800,
     "minimax-m2.7:cloud": 196608,
+    "minimax-m3.1-flash:cloud": 1000000,
     "minimax-m3:cloud": 512000,
     "mistral-large-3:675b-cloud": 262144,
     "nemotron-3-nano:30b-cloud": 1048576,
