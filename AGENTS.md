@@ -435,7 +435,7 @@ must not be there either.
 
 ## Build, test, lint
 
-Go 1.27.0. Use the Makefile rather than raw `go` invocations where a target
+Go 1.27.3. Use the Makefile rather than raw `go` invocations where a target
 exists:
 
 ```bash
