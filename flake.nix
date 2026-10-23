@@ -29,7 +29,7 @@
             # does not degrade to a no-op, it aborts the build.
             postPatch = ''
               substituteInPlace go.mod \
-                --replace-fail 'go 1.27.0' 'go 1.26.5'
+                --replace-fail 'go 1.27.3' 'go 1.26.5'
             '';
 
             subPackages = [ "cmd/pi" ];
