@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	ollamaapi "github.com/ollama/ollama/api"
@@ -873,6 +874,15 @@ func ollamaRunNonStreaming(ctx context.Context, client *ollamaapi.Client, chatRe
 // (details.context_length — num_ctx for local models, the published window for
 // cloud models) and capability flags, so both come back filled in rather than
 // from a second per-model /api/show round trip.
+//
+// It is not always enough. The daemon reports no context_length for a model
+// whose details block carries no parameter size and no family — the ones it
+// was handed from a registry rather than built locally — and a model whose
+// num_ctx was never set. Those models come back with a zero window, which the
+// table prints as blank, so fillOllamaMissingContext asks the server per
+// model for the ones /api/tags left empty. The requests run concurrently
+// because a daemon with a large catalog would otherwise pay a round trip per
+// model, serially.
 func OllamaListModels(ctx context.Context, baseURL string) ([]ModelInfo, error) {
 	if baseURL == "" {
 		baseURL = "http://localhost:11434"
@@ -899,7 +909,57 @@ func OllamaListModels(ctx context.Context, baseURL string) ([]ModelInfo, error) 
 		}
 		models = append(models, info)
 	}
+	fillOllamaMissingContext(ctx, baseURL, models)
 	return models, nil
+}
+
+// ollamaContextLookupConcurrency bounds the per-model /api/show requests made
+// while filling in missing context windows.
+//
+// The daemon serves them concurrently, so this is a politeness limit rather
+// than a throughput one: enough to keep a local round trip cheap, few enough
+// not to open a connection per model in a large catalog.
+const ollamaContextLookupConcurrency = 8
+
+// fillOllamaMissingContext asks the Ollama server for the context window of
+// every model that /api/tags left at zero, and writes the answer back into
+// the slice in place.
+//
+// A model with no window is not a cosmetic gap: the window is the denominator
+// every auto-compaction threshold is measured against, so an unknown window
+// means compaction never fires and the transcript grows until the server
+// refuses the request. The server knows the answer in both cases the daemon
+// omits it — a registry model carries its window in its model_info, and a
+// model with no num_ctx has one baked into the weights.
+//
+// A model the server cannot answer for is left at zero rather than being
+// dropped or guessed at: an error here is a transient one, and the caller
+// already treats zero as "unknown".
+func fillOllamaMissingContext(ctx context.Context, baseURL string, models []ModelInfo) {
+	missing := make([]int, 0, len(models))
+	for i, m := range models {
+		if m.ContextWindow == 0 {
+			missing = append(missing, i)
+		}
+	}
+	if len(missing) == 0 {
+		return
+	}
+
+	sem := make(chan struct{}, ollamaContextLookupConcurrency)
+	var wg sync.WaitGroup
+	for _, i := range missing {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			if n := OllamaContextWindowSize(ctx, baseURL, models[i].ID); n > 0 {
+				models[i].ContextWindow = n
+			}
+		}(i)
+	}
+	wg.Wait()
 }
 
 // ollamaCapabilities maps the daemon's capability flags to the strings the
@@ -911,6 +971,7 @@ func ollamaCapabilities(caps []ollamamodel.Capability) []string {
 		ollamamodel.CapabilityThinking:   "thinking",
 		ollamamodel.CapabilityVision:     "vision",
 		ollamamodel.CapabilityEmbedding:  "embedding",
+		ollamamodel.CapabilityDecision:   "decision",
 	}
 	out := make([]string, 0, len(caps))
 	for _, c := range caps {

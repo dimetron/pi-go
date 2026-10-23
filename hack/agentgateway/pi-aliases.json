@@ -262,6 +262,13 @@
             "cacheRead": "0.007"
           }
         },
+        "deepseek-v4.1-flash": {
+          "rates": {
+            "input": "0.15",
+            "output": "0.6",
+            "cacheRead": "0.003"
+          }
+        },
         "deepseek-v4.1-flash:cloud": {
           "rates": {
             "input": "0.15",
@@ -381,6 +388,13 @@
             "cacheRead": "0.014"
           }
         },
+        "gpt-oss:120b:cloud": {
+          "rates": {
+            "input": "0.15",
+            "output": "0.6",
+            "cacheRead": "0.014"
+          }
+        },
         "gpt-oss:120b-cloud": {
           "rates": {
             "input": "0.15",
@@ -389,6 +403,13 @@
           }
         },
         "gpt-oss:20b": {
+          "rates": {
+            "input": "0.07",
+            "output": "0.3",
+            "cacheRead": "0.035"
+          }
+        },
+        "gpt-oss:20b:cloud": {
           "rates": {
             "input": "0.07",
             "output": "0.3",
@@ -496,6 +517,34 @@
           "rates": {
             "input": "0.5",
             "output": "1.5"
+          }
+        },
+        "mistral-large-4": {
+          "rates": {
+            "input": "0.68",
+            "output": "2.09",
+            "cacheRead": "0.07"
+          }
+        },
+        "mistral-large-4:cloud": {
+          "rates": {
+            "input": "0.68",
+            "output": "2.09",
+            "cacheRead": "0.07"
+          }
+        },
+        "muse-spark-open": {
+          "rates": {
+            "input": "1.25",
+            "output": "4.25",
+            "cacheRead": "0.15"
+          }
+        },
+        "muse-spark-open:cloud": {
+          "rates": {
+            "input": "1.25",
+            "output": "4.25",
+            "cacheRead": "0.15"
           }
         },
         "nemotron-3-nano": {

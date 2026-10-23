@@ -433,7 +433,7 @@ column is about what actually touches each file, not about permissions.
 | File | Written by | Contents |
 |---|---|---|
 | `base-costs.json` | the gateway, on every refresh | The full models.dev catalog, ~930 models across 19 providers. Machine-managed. |
-| `pi-aliases.json` | you, by hand | 62 hand-maintained entries: pi-go's dotted aliases (`claude-sonnet-4.5`), older OpenAI ids (`o1-mini`, `gpt-5.1-codex`), and Ollama/OpenRouter prices the base catalog lacks. |
+| `pi-aliases.json` | you, by hand | 135 hand-maintained entries: pi-go's dotted aliases (`claude-sonnet-4.5`), older OpenAI ids (`o1-mini`, `gpt-5.1-codex`), and Ollama/OpenRouter prices the base catalog lacks. |
 
 **`base-costs.json` is mounted writable on purpose.** The UI's refresh action —
 `POST /api/costs/refresh-base` — fetches models.dev, **overwrites this file**,

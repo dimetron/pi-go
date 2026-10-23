@@ -34,6 +34,17 @@ Usage:
   daemon has pulled, so a checked-in snapshot would describe one developer's
   machine; `ValidateModel` exempts Ollama for the same reason.
 
+  The `ollama` section of `context-windows.json` is the exception, and it is a
+  different thing from a model catalog: it holds the context windows of the
+  models Ollama Cloud serves, which are the same for everyone. The local
+  daemon's own models are not listed there — those are machine state, and the
+  runtime asks the daemon for their window instead (see `OllamaContextWindowSize`).
+  The values are Ollama's own, read from `/api/show` and from
+  `api.ollama.com/v1/models`; where models.dev disagrees with Ollama, Ollama
+  wins, because Ollama enforces the limit it reports. Regenerate it by
+  collecting the cloud catalog's `context_window` values, one entry per model
+  and per `:cloud`-tagged spelling.
+
 - `modelsdev-pricing.json` is a compact snapshot of
   https://models.dev/api.json, keeping only the providers pi-go supports
   (`openai`, `anthropic`, `gemini`, `mistral`, `xai`, `azure`, `openrouter`)
