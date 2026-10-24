@@ -16,7 +16,7 @@ Last updated: 2026-09-22
 | [Google Gemini](#google-gemini) | 43 | `GEMINI_API_KEY` |
 | [Mistral](#mistral) | 34 | `MISTRAL_API_KEY` |
 | [xAI](#xai) | 7 | `XAI_API_KEY` |
-| [Ollama](#ollama) | 13 | local daemon; no key needed |
+| [Ollama](#ollama) | 23 | local daemon; no key needed |
 | [OpenRouter](#openrouter) | 445 | `OPENROUTER_API_KEY` |
 | [Agentgateway](#agentgateway) | 25 | local gateway |
 | [Azure](#azure) | 31 deployments | `AZUREOPENAI_API_KEY`; names are per-subscription |
@@ -285,25 +285,35 @@ API key: `XAI_API_KEY`.
 | grok-4.20-0309-reasoning | 2026-03-09 | $1.25/$2.50 |
 | grok-4.20-multi-agent-0309 | 2026-03-09 | $1.25/$2.50 |
 
-## Ollama — 13 models
+## Ollama — 23 models
 
 Local daemon, plus Ollama Cloud (`*:cloud` tags). No API key for local models.
 
 | Model | Price (in/out per 1M) | Context | Capabilities |
 |---|---|---|---|
-| all-minilm:latest | — | 512 | embedding |
-| deepseek-v4-flash:0731-cloud | — | 1.05M | completion, thinking, tools |
-| deepseek-v4-flash:cloud | — | 1.05M | completion, thinking, tools |
-| deepseek-v4.1-flash:cloud | $0.15/$0.60 | 1.05M | completion, thinking, tools, vision |
-| embeddinggemma:latest | — | 2K | embedding |
-| gemma4:12b-mlx | — | — | completion, thinking, tools, vision |
-| gemma4:31b-cloud | $0.14/$0.40 | 262K | completion, thinking, tools, vision |
-| gemma4:cloud | $0.14/$0.40 | 262K | completion, thinking, tools, vision |
-| glm-5.3-flash:cloud | $0.15/$0.50 | 1.05M | completion, thinking, tools, vision |
-| glm-5.3:cloud | $1.40/$4.40 | 1.05M | completion, thinking, tools |
-| kimi-k3:cloud | $3.00/$15.00 | 1.05M | completion, thinking, tools, vision |
-| minimax-m3.1-flash:cloud | $0.15/$0.60 | 1.00M | completion, thinking, tools, vision |
-| minimax-m3:cloud | $0.60/$2.40 | 524K | completion, thinking, tools, vision |
+| beam | — | 1.05M | completion, thinking, tools |
+| clef:27b | — | 65K | decision, vision |
+| deepseek-v4-pro:0813 | $0.66/$1.98 | 1.05M | completion, thinking, tools |
+| deepseek-v4.1-flash | $0.15/$0.60 | 1.05M | completion, thinking, tools, vision |
+| deepseek-v4.1-flash:1017 | $0.15/$0.60 | 1.05M | completion, thinking, tools, vision |
+| gemma4:31b | $0.14/$0.40 | 262K | completion, thinking, tools, vision |
+| glm-5.2 | $1.40/$4.40 | 1.05M | completion, thinking, tools |
+| glm-5.3 | $1.40/$4.40 | 1.05M | completion, thinking, tools |
+| glm-5.3-flash | $0.15/$0.50 | 1.05M | completion, thinking, tools, vision |
+| gpt-oss:120b | $0.15/$0.60 | 131K | completion, thinking, tools |
+| gpt-oss:20b | $0.07/$0.30 | 131K | completion, thinking, tools |
+| kimi-k2.6 | $0.95/$4.00 | 262K | completion, thinking, tools, vision |
+| kimi-k2.7-code | $0.95/$4.00 | 262K | completion, thinking, tools, vision |
+| kimi-k3 | $3.00/$15.00 | 1.05M | completion, thinking, tools, vision |
+| minimax-m2.7 | $0.30/$1.20 | 196K | completion, thinking, tools |
+| minimax-m3 | $0.60/$2.40 | 512K | completion, thinking, tools, vision |
+| minimax-m3.1-flash | $0.15/$0.60 | 1.00M | completion, thinking, tools, vision |
+| mistral-large-3:675b | $0.50/$1.50 | 262K | completion, tools, vision |
+| mistral-large-4 | $0.68/$2.09 | 1.05M | completion, thinking, tools, vision |
+| muse-spark-open | $1.25/$4.25 | 1.05M | completion, thinking, tools, vision |
+| nemotron-3-nano:30b | $0.06/$0.24 | 262K | completion, thinking, tools |
+| nemotron-3-super | $0.01/$0.60 | 262K | completion, thinking, tools |
+| nemotron-3-ultra | $0.10/$3.00 | 262K | completion, thinking, tools |
 
 ## OpenRouter — 445 models
 

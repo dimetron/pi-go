@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -691,6 +692,98 @@ func TestOllamaListModelsWithMockServer(t *testing.T) {
 	}
 	if models[1].OwnedBy != "321B · glm-5.3" {
 		t.Errorf("glm-5.3:cloud OwnedBy = %q, want %q", models[1].OwnedBy, "321B · glm-5.3")
+	}
+}
+
+// TestOllamaListModelsFillsMissingContextWindow pins that a model the daemon
+// reports without a context length gets one.
+//
+// The daemon omits details.context_length for a model it did not build
+// locally — a registry model whose details block carries no parameter size
+// and no family. The window is not a cosmetic field: it is the denominator
+// every auto-compaction threshold is measured against, so a zero window means
+// compaction never fires and the transcript grows until the server refuses
+// the request. The server knows the answer, so the listing asks for it.
+func TestOllamaListModelsFillsMissingContextWindow(t *testing.T) {
+	var shows atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/tags":
+			// One model with a window, one without: the shape the daemon
+			// serves for a registry model it did not build.
+			_, _ = w.Write([]byte(`{"models":[
+				{"name":"llama3:latest","details":{"parameter_size":"8.0B","context_length":131072},"capabilities":["completion"]},
+				{"name":"flint:latest","details":{"parameter_size":"","quantization_level":"int4"},"capabilities":["completion","thinking","tools"]}
+			]}`))
+		case "/api/show":
+			shows.Add(1)
+			_, _ = w.Write([]byte(`{"model_info":{"flint.context_length":262144}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	models, err := OllamaListModels(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatalf("OllamaListModels() error: %v", err)
+	}
+	if len(models) != 2 {
+		t.Fatalf("expected 2 models, got %d: %v", len(models), models)
+	}
+	byID := map[string]ModelInfo{}
+	for _, m := range models {
+		byID[m.ID] = m
+	}
+	// The model the daemon described fully keeps the daemon's own answer, and
+	// no /api/show is spent on it.
+	if got := byID["llama3:latest"].ContextWindow; got != 131072 {
+		t.Errorf("llama3:latest ContextWindow = %d, want 131072", got)
+	}
+	// The model it did not is filled in from the server.
+	if got := byID["flint:latest"].ContextWindow; got != 262144 {
+		t.Errorf("flint:latest ContextWindow = %d, want 262144", got)
+	}
+	if shows.Load() != 1 {
+		t.Errorf("/api/show calls = %d, want 1 — only the model with no window should be asked for", shows.Load())
+	}
+}
+
+// TestOllamaListModelsKeepsUnknownContextWindow pins that a model the server
+// cannot answer for is reported with no window rather than dropped.
+//
+// A model whose lookup fails is one the server does not know, and a
+// transient error looks the same. Either way there is no window to report,
+// and the caller already treats zero as "unknown" — so the listing must not
+// invent one, and must not lose the model either.
+func TestOllamaListModelsKeepsUnknownContextWindow(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/tags":
+			_, _ = w.Write([]byte(`{"models":[{"name":"mystery:latest","details":{},"capabilities":["completion"]}]}`))
+		case "/api/show":
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"model 'mystery:latest' not found"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	models, err := OllamaListModels(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatalf("OllamaListModels() error: %v", err)
+	}
+	if len(models) != 1 {
+		t.Fatalf("expected 1 model, got %d: %v", len(models), models)
+	}
+	if models[0].ID != "mystery:latest" {
+		t.Errorf("models[0].ID = %q, want mystery:latest", models[0].ID)
+	}
+	if models[0].ContextWindow != 0 {
+		t.Errorf("mystery:latest ContextWindow = %d, want 0 (unknown)", models[0].ContextWindow)
 	}
 }
 
