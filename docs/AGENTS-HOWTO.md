@@ -8,8 +8,8 @@ This guide explains how to configure pi-go's extension system — skills, agent 
 
 | Claude Code concept | File/location | pi-go equivalent | File/location |
 |---|---|---|---|
-| Global AI instructions | `~/.claude/CLAUDE.md` | Global config + skills | `~/.pi-go/config.json` + `~/.pi-go/skills/` |
-| Project AI instructions | `CLAUDE.md` (repo root) or `.claude/CLAUDE.md` | Project agent instructions | `.pi-go/AGENTS.md` |
+| Global AI instructions | `~/.claude/CLAUDE.md` | Global agent instructions | `~/.pi-go/AGENTS.md` |
+| Project AI instructions | `CLAUDE.md` (repo root) or `.claude/CLAUDE.md` | Project agent instructions | `AGENTS.md`, `CLAUDE.md`, `AGENT.md`, or `.pi-go/AGENTS.md` (one file per directory; see below) |
 | Global skills | `~/.claude/skills/<name>/SKILL.md` | Global skills | `~/.pi-go/skills/<name>/SKILL.md` |
 | Project skills | `.claude/skills/<name>/SKILL.md` | Project skills | `.pi-go/skills/<name>/SKILL.md` |
 | Skill selection index | `~/.claude/INDEX.md` | (bundled `agents-md` skill handles this) | n/a |
@@ -17,7 +17,7 @@ This guide explains how to configure pi-go's extension system — skills, agent 
 | MCP servers | `~/.claude/settings.json` → `mcpServers` | MCP servers | `~/.pi-go/config.json` → `mcp.servers` |
 | Subagent types | Agent tool with `subagent_type` | Named agent definitions | `~/.pi-go/agents/<name>.md` or `.pi-go/agents/<name>.md` |
 
-The key structural difference is priority: pi-go loads **bundled → user (`~/.pi-go/`) → project (`.pi-go/`)**, with later layers overriding earlier ones. Claude Code does the same for skills (global → project).
+For skills, pi-go loads **bundled → user (`~/.pi-go/`) → project (`.pi-go/`)**, with later layers overriding earlier ones. Claude Code does the same (global → project). Instruction files are different: they are concatenated, most general first, and a nearer file does not replace an earlier one.
 
 ---
 
@@ -27,6 +27,7 @@ The key structural difference is priority: pi-go loads **bundled → user (`~/.p
 
 ```
 ~/.pi-go/
+├── AGENTS.md            # global rules, loaded ahead of project instruction files
 ├── config.json          # model roles, hooks, MCP, guardrails, memory toggles
 ├── .env                 # API keys (written by `pi login`, never commit this)
 ├── skills/              # global skills
@@ -47,7 +48,7 @@ The key structural difference is priority: pi-go loads **bundled → user (`~/.p
 
 ```
 .pi-go/
-├── AGENTS.md            # project rules injected into agent context at startup
+├── AGENTS.md            # fallback when the parent directory has no AGENT.md, AGENTS.md, or CLAUDE.md
 ├── config.json          # project-specific overrides (model roles, hooks, etc.)
 ├── mcp.json             # project MCP server definitions
 ├── skills/              # project skills (override global skills of the same name)
@@ -62,13 +63,27 @@ Project-local config overrides global config for the same keys. Both files are m
 
 ---
 
-## 1. Project Instructions: `.pi-go/AGENTS.md`
+## 1. Project instructions
 
-**Claude Code analogy:** `CLAUDE.md` at the repo root.
+**Claude Code analogy:** `CLAUDE.md` / `~/.claude/CLAUDE.md`.
 
-This file is injected into the agent's context at startup. Put everything here that a developer or AI needs to know about the project before touching code.
+When a session starts, pi-go reads instruction files as plain text and appends them to the system prompt under `# Project Rules`. They are not parsed as a markdown dialect, and the model does not have to open them with a tool. `pi --system` replaces the built-in prompt and skips this loading.
 
-The file already exists at `.pi-go/AGENTS.md` in this repo. A well-structured version covers:
+**Order**, most general first:
+
+1. `~/.pi-go/AGENTS.md`, when the directory walk below did not already select that exact path.
+2. One file per directory, from the filesystem root down to the current working directory. Directories with no matching file are skipped. A file in a child directory is appended after its parents; it does not replace them.
+
+**Which file in a directory.** The first candidate that exists and is at most 128 KiB wins. A larger file is ignored and the next name is tried:
+
+1. `AGENT.md`
+2. `AGENTS.md`
+3. `CLAUDE.md`
+4. `.pi-go/AGENTS.md`
+
+When the working directory is inside your home directory and `~/.pi-go/AGENTS.md` is the file selected for `~`, it stays in that walk position (still ahead of any project directory under home) and is not copied to the front a second time.
+
+Put everything here that a developer or AI needs to know about the project before touching code. A well-structured version covers:
 
 ```markdown
 # Project Rules
@@ -461,7 +476,8 @@ Create per the example above for security-focused review passes.
 
 | Task | What to create | Where |
 |---|---|---|
-| Project rules / architecture | `AGENTS.md` | `.pi-go/AGENTS.md` |
+| User-wide rules | `AGENTS.md` | `~/.pi-go/AGENTS.md` |
+| Project rules / architecture | `AGENTS.md`, `CLAUDE.md`, or `AGENT.md` | that directory, or `.pi-go/AGENTS.md` if none of those exist there |
 | Teach agent a workflow | Skill `<name>/SKILL.md` | `.pi-go/skills/<name>/SKILL.md` |
 | Reuse Claude Code skills | Nothing — auto-discovered | `.claude/skills/` (already read) |
 | Run shell commands on tool events | `hooks` in config | `.pi-go/config.json` |

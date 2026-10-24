@@ -466,6 +466,7 @@ Artifacts:
 
 ```
 ~/.pi-go/                              # Global config
+├── AGENTS.md                          # Global agent instructions (loaded first)
 ├── config.json                        # Model roles, hooks, MCP, guardrails
 ├── .env                               # API keys (from /login)
 ├── skills/*.SKILL.md                  # Global skills
@@ -477,7 +478,7 @@ Artifacts:
 
 .pi-go/                                # Project-local config (overrides global)
 ├── config.json                        # Project-specific model/roles
-├── AGENTS.md                          # Agent instructions for this repo
+├── AGENTS.md                          # Fallback when the parent directory has no AGENT.md, AGENTS.md, or CLAUDE.md
 ├── skills/*.SKILL.md                  # Project-specific skills
 └── sops/                              # Project SOP artifacts
 ```
