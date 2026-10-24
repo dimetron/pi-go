@@ -250,18 +250,18 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "^1.4.0"
+    "@agentclientprotocol/sdk": "^2.0.2"
   },
   "devDependencies": {
     "@catppuccin/palette": "1.8.0",
     "@catppuccin/vscode": "^3.18.1",
-    "@types/node": "^22.0.0",
+    "@types/node": "^24.19.2",
     "@types/vscode": "1.137.0",
-    "@vitest/coverage-v8": "^5.0.1",
-    "dompurify": "^3.4.16",
-    "esbuild": "^0.25.0",
-    "marked": "^15.0.7",
-    "typescript": "^5.7.0",
-    "vitest": "^5.0.1"
+    "@vitest/coverage-v8": "^5.0.5",
+    "dompurify": "^3.4.17",
+    "esbuild": "^0.28.2",
+    "marked": "^18.1.1",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
   }
 }
