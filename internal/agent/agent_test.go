@@ -1708,3 +1708,65 @@ func TestCreateSession_OmitsEmptyVersion(t *testing.T) {
 		t.Errorf("unconfigured agent wrote version = %v; want the key absent", raw["version"])
 	}
 }
+
+func TestValidateGoalObjective(t *testing.T) {
+	if err := ValidateGoalObjective("keep the tests green"); err != nil {
+		t.Errorf("valid objective rejected: %v", err)
+	}
+	if err := ValidateGoalObjective(""); err == nil {
+		t.Error("empty objective accepted")
+	}
+	if err := ValidateGoalObjective("   "); err == nil {
+		t.Error("whitespace-only objective accepted")
+	}
+	exact := strings.Repeat("x", pisession.MaxGoalObjectiveBytes)
+	if err := ValidateGoalObjective(exact); err != nil {
+		t.Errorf("objective at the cap rejected: %v", err)
+	}
+	if err := ValidateGoalObjective(exact + "x"); err == nil {
+		t.Error("objective over the cap accepted")
+	}
+}
+
+func TestAppendActiveGoal(t *testing.T) {
+	active := &pisession.Goal{
+		Objective: "keep the tests green",
+		Status:    pisession.GoalStatusActive,
+		MaxCycles: 5,
+	}
+
+	got := AppendActiveGoal("base", active, 2)
+	for _, want := range []string{
+		"base", "# Current Goal", "keep the tests green",
+		"goal_complete", "cycle=2", "of at most 5",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("AppendActiveGoal() is missing %q", want)
+		}
+	}
+
+	// Off states inject nothing: a completed or paused goal must not be able to
+	// drag the agent back into work.
+	for _, status := range []pisession.GoalStatus{
+		pisession.GoalStatusPaused, pisession.GoalStatusComplete,
+	} {
+		goal := *active
+		goal.Status = status
+		if got := AppendActiveGoal("base", &goal, 2); got != "base" {
+			t.Errorf("AppendActiveGoal(%q) = %q, want the prompt unchanged", status, got)
+		}
+	}
+	if got := AppendActiveGoal("base", nil, 2); got != "base" {
+		t.Errorf("AppendActiveGoal(nil) = %q, want the prompt unchanged", got)
+	}
+
+	// With no cycle to name, the block still describes the goal but must not
+	// invent a cycle number the tool would reject.
+	got = AppendActiveGoal("base", active, 0)
+	if strings.Contains(got, "cycle=") {
+		t.Errorf("AppendActiveGoal(cycle 0) names a cycle: %q", got)
+	}
+	if !strings.Contains(got, "goal_complete") {
+		t.Error("AppendActiveGoal(cycle 0) dropped the completion instruction")
+	}
+}

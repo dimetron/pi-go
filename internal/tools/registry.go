@@ -25,6 +25,10 @@ type coreConfig struct {
 	// needs a search backend that is often absent, so advertising it hands the
 	// model something that fails mid-turn. See WithWebSearch.
 	webSearch bool
+	// goal opts into the goal_complete tool, which exists only to end a /goal
+	// loop. Registered without a goal it advertises a verb the agent can never
+	// usefully use, so it travels with the sink that gives it meaning.
+	goal *GoalController
 }
 
 // WithBashSupervisor makes the bash tool use a caller-owned supervisor, so the
@@ -61,6 +65,23 @@ func WithReadLedger(l *ReadLedger) CoreOption {
 // webSearchEnvEnabled.
 func WithWebSearch() CoreOption {
 	return func(c *coreConfig) { c.webSearch = true }
+}
+
+// WithGoal registers the goal_complete tool, which declares the session's /goal
+// objective met and so ends the automatic goal loop.
+//
+// The returned state is the same one the tool holds. It is how the TUI tells the
+// tool which cycle is running — without that, a completion reported by a turn
+// that started before the goal was set could close a goal it never worked on —
+// and how the tool's reports get back to the loop, which owns the goal and
+// decides what a report is worth.
+//
+// Opt-in because the tool is meaningless with no goal: an agent offered
+// goal_complete in an ordinary session can only misuse it. It also keeps the
+// default tool count stable for callers that never run a goal loop.
+func WithGoal() (CoreOption, *GoalController) {
+	state := &GoalController{}
+	return func(c *coreConfig) { c.goal = state }, state
 }
 
 // webSearchEnvVar enables web_search process-wide.
@@ -131,6 +152,16 @@ func CoreTools(sandbox *Sandbox, opts ...CoreOption) ([]tool.Tool, error) {
 		return nil, err
 	}
 	tools = append(tools, sessionStatsTool)
+
+	// Likewise goal_complete: only a caller running a /goal loop wants a tool
+	// whose only purpose is to end one.
+	if cfg.goal != nil {
+		goalTool, err := newGoalCompleteTool(cfg.goal)
+		if err != nil {
+			return nil, err
+		}
+		tools = append(tools, goalTool)
+	}
 
 	// Add web_search only when the caller opted in. It reaches the network
 	// rather than the filesystem, and where no Ollama daemon or OLLAMA_API_KEY

@@ -20,6 +20,7 @@ import (
 	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/extension"
 	"github.com/dimetron/pi-go/internal/palace"
+	pisession "github.com/dimetron/pi-go/internal/session"
 	"github.com/dimetron/pi-go/internal/sop"
 	"github.com/dimetron/pi-go/internal/subagent"
 )
@@ -158,6 +159,17 @@ type model struct {
 
 	// Run flow state (/run command).
 	run *runState
+
+	// goal is the session's /goal objective, or nil when none is set. It is
+	// stored as a pointer so "loaded from disk", "just set" and "just completed"
+	// are one code path: everything downstream asks whether the goal is nil, not
+	// how it got there.
+	goal *pisession.Goal
+	// goalCanceled stops the loop without changing the goal's status. Esc during
+	// an automatic cycle, or hitting the cycle budget, sets it — the objective
+	// stays active (so /goal resume continues it) but no further turn starts on
+	// its own. /goal set, /goal resume and clearGoal reset it.
+	goalCanceled bool
 
 	// prAutofix is the in-flight /pr-autofix run, or nil. Unlike run, it holds
 	// no copy of the workflow: the SOP is the workflow and the engine walks it.
@@ -2257,6 +2269,7 @@ func (m *model) statusRenderInput() StatusRenderInput {
 		DiffAdded:    m.diffAdded,
 		DiffRemoved:  m.diffRemoved,
 		RunCycle:     rc,
+		Goal:         m.goalIndicatorText(),
 		FolderName:   sidebarFolderName(m.cwd()),
 		HostName:     hostName,
 		LoadingItems: m.loadingItems,
@@ -2435,6 +2448,7 @@ func (m *model) handleInitEvent(msg initEventMsg) (tea.Model, tea.Cmd) {
 		m.statusModel.GitBranch = r.GitBranch
 		m.diffAdded = r.DiffAdded
 		m.diffRemoved = r.DiffRemoved
+		m.cfg.GoalTool = r.GoalTool
 		m.cfg.MCPToolsets = r.MCPToolsets
 		m.cfg.MCPServers = r.MCPServers
 
@@ -2446,6 +2460,7 @@ func (m *model) handleInitEvent(msg initEventMsg) (tea.Model, tea.Cmd) {
 		// tracker that were just installed above.
 		if r.Resumed {
 			m.restoreSession()
+			m.restoreGoal()
 		}
 
 		var cmds []tea.Cmd

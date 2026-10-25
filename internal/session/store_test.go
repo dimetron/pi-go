@@ -2432,3 +2432,72 @@ func readMetaRaw(t *testing.T, path string) map[string]any {
 	}
 	return raw
 }
+
+// The goal is written whole, so its loop counters must survive the JSON
+// round-trip: a resumed session continues the same budget rather than granting
+// a fresh one.
+func TestGoal_RoundTrip(t *testing.T) {
+	svc := newTestService(t)
+	sid := createTestSession(t, svc)
+
+	goal := &Goal{
+		Objective:      "keep the tests green",
+		Status:         GoalStatusActive,
+		Cycles:         3,
+		MaxCycles:      8,
+		Turn:           3,
+		CreatedAt:      1_700_000_000,
+		UpdatedAt:      1_700_000_100,
+		CompletedAt:    1_700_000_200,
+		CompletionNote: "all packages pass",
+	}
+	if err := svc.UpdateGoal(sid, goal); err != nil {
+		t.Fatalf("UpdateGoal: %v", err)
+	}
+
+	got, err := svc.GetGoal(sid)
+	if err != nil {
+		t.Fatalf("GetGoal: %v", err)
+	}
+	if got == nil {
+		t.Fatal("GetGoal returned nil after UpdateGoal")
+	}
+	if *got != *goal {
+		t.Errorf("GetGoal = %+v, want %+v", got, goal)
+	}
+
+	// On-disk: meta.json carries it under "goal".
+	data, err := os.ReadFile(filepath.Join(svc.baseDir, sid, "meta.json"))
+	if err != nil {
+		t.Fatalf("reading meta.json: %v", err)
+	}
+	var raw struct {
+		Goal *Goal `json:"goal"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("decoding meta.json: %v", err)
+	}
+	if raw.Goal == nil || raw.Goal.Cycles != 3 || raw.Goal.Status != GoalStatusActive {
+		t.Errorf("meta.json goal = %+v, want the recorded goal", raw.Goal)
+	}
+
+	// Clearing writes absence, not a zero-value goal.
+	if err := svc.UpdateGoal(sid, nil); err != nil {
+		t.Fatalf("UpdateGoal(nil): %v", err)
+	}
+	if got, err := svc.GetGoal(sid); err != nil || got != nil {
+		t.Errorf("GetGoal after clear = %+v, %v; want nil, nil", got, err)
+	}
+}
+
+// An unknown session is an error, not a silent nil: the caller has to know its
+// write went nowhere.
+func TestGoal_UnknownSession(t *testing.T) {
+	svc := newTestService(t)
+	if err := svc.UpdateGoal("nope", &Goal{Objective: "x"}); err == nil {
+		t.Error("UpdateGoal on an unknown session returned no error")
+	}
+	if _, err := svc.GetGoal("nope"); err == nil {
+		t.Error("GetGoal on an unknown session returned no error")
+	}
+}

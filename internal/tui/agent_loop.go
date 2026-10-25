@@ -832,6 +832,16 @@ func (m *model) cancelAgent() tea.Cmd {
 		m.agentCancel()
 		m.agentCancel = nil
 	}
+	// Esc is the way out of an automatic loop. Without this the canceled turn
+	// reports done, handleAgentDone asks whether to continue, and the goal
+	// immediately starts the turn the user just stopped.
+	if m.goalActive() {
+		m.goalCanceled = true
+		m.chatModel.AppendMeta("Goal loop stopped. /goal resume to continue.")
+		// The tool must stop accepting reports for a cycle that is no longer
+		// running, or a late completion would close a goal the user just stopped.
+		m.publishGoalState()
+	}
 	m.running = false
 	m.steering = false
 	m.statusModel.ActiveTool = ""
@@ -908,6 +918,12 @@ func (m *model) agentRun() agentRunConfig {
 type queuedPrompt struct {
 	text     string
 	mentions []string
+	// automatic marks a prompt the /goal loop queued rather than one the user
+	// typed. It changes two things: the session title is not derived from it (a
+	// loop restarting eight times would otherwise rename the session after the
+	// first cycle's boilerplate), and it is not stored as the prompt /retry
+	// replays.
+	automatic bool
 }
 
 const maxPendingPrompts = 32
@@ -979,11 +995,24 @@ func (m *model) startNextPrompt() (tea.Model, tea.Cmd) {
 	next := m.pendingPrompts[0]
 	m.pendingPrompts = m.pendingPrompts[1:]
 	m.steering = false
-	return m.submitPrompt(next.text, next.mentions)
+	return m.submitQueuedPrompt(next)
+}
+
+// submitQueuedPrompt sends the oldest queued prompt, distinguishing the loop's
+// own turns from the user's.
+func (m *model) submitQueuedPrompt(q queuedPrompt) (tea.Model, tea.Cmd) {
+	return m.submit(q.text, q.mentions, q.automatic)
 }
 
 // submitPrompt sends a user prompt to the agent.
 func (m *model) submitPrompt(text string, mentions []string) (tea.Model, tea.Cmd) {
+	return m.submit(text, mentions, false)
+}
+
+// submit sends one prompt to the agent. automatic marks a prompt the /goal loop
+// queued: it travels the same path, but it neither titles the session nor becomes
+// what /retry replays.
+func (m *model) submit(text string, mentions []string, automatic bool) (tea.Model, tea.Cmd) {
 	// Append referenced file annotations for @mentions.
 	promptText := text
 	if len(mentions) > 0 {
@@ -1006,7 +1035,12 @@ func (m *model) submitPrompt(text string, mentions []string) (tea.Model, tea.Cmd
 	// emit OSC 0 to update the terminal window/tab title. Best-effort: a
 	// session service that doesn't support titles (or a non-TTY stdout) is
 	// a no-op, never a turn blocker.
-	m.applySessionTitle(text)
+	//
+	// Skipped for the loop's own prompts, which would otherwise name the session
+	// after "Continue pursuing the session goal (cycle 3 of 8)".
+	if !automatic {
+		m.applySessionTitle(text)
+	}
 
 	m.chatModel.Messages = append(m.chatModel.Messages, message{role: "user", content: text})
 	m.chatModel.Messages = append(m.chatModel.Messages, message{role: "assistant", content: ""})
@@ -1023,9 +1057,15 @@ func (m *model) submitPrompt(text string, mentions []string) (tea.Model, tea.Cmd
 	// Remember what was asked, so a turn that dies under a provider failure can
 	// be re-sent without retyping it (see handleRetry). The flag is cleared here
 	// rather than on success so a retry of a retry stays offerable.
-	m.lastPrompt = text
-	m.lastMentions = append([]string(nil), mentions...)
-	m.lastPromptFailed = false
+	//
+	// The loop's prompts are not remembered: /retry exists to re-send what the
+	// user asked for, and replaying "Continue pursuing the session goal (cycle 4
+	// of 8)" after the loop was stopped would restart work they ended.
+	if !automatic {
+		m.lastPrompt = text
+		m.lastMentions = append([]string(nil), mentions...)
+		m.lastPromptFailed = false
+	}
 
 	return m, tea.Batch(m.startAgentLoop(promptText), matrixTickCmd())
 }
@@ -2028,7 +2068,11 @@ func (m *model) handleAgentDone(msg agentDoneMsg) (tea.Model, tea.Cmd) {
 	if len(m.pendingPrompts) > 0 {
 		return m.startNextPrompt()
 	}
-	return m, nil
+	// Last, so a prompt the user queued during the turn runs before the loop
+	// spends another turn of its own. A user who typed something is telling the
+	// agent what it got wrong; running that first is what keeps the loop
+	// convergent instead of merely persistent.
+	return m.continueGoalLoop(msg.err)
 }
 
 // runLifecycleHooks fires every configured lifecycle hook for the given event,

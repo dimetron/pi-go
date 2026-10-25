@@ -121,6 +121,7 @@ var slashCommandSpecs = []slashCommandSpec{
 	// After /run and /pr-autofix: autocomplete returns the first prefix match, so
 	// "/r" must keep completing to /run.
 	{name: "/retry", desc: "Re-send the prompt of a turn that failed", run: slashCmdBare((*model).handleRetry)},
+	{name: "/goal", desc: "Set a goal and keep taking turns until it is met", run: (*model).handleGoalCommand},
 	{name: "/skills", desc: "List skills (create, load)", run: (*model).handleSkillsCommand},
 	{name: "/skill-list", desc: "List all loaded skills", hidden: true, run: slashCmdBare((*model).handleSkillListCommand)},
 	{name: "/skill-load", desc: "Reload skills from disk", hidden: true, run: slashCmdBare((*model).handleSkillLoadCommand)},
@@ -929,6 +930,15 @@ func (m *model) formatHelp() string {
 	b.WriteString("| `/plan <idea>` | Start PDD planning session |\n")
 	b.WriteString("| `/plan resume` | Resume interrupted plan session |\n")
 	b.WriteString("| `/run <spec>` | Execute a spec with task agent |\n")
+
+	b.WriteString("\n**Long-running tasks:**\n\n")
+	b.WriteString("| Command | Description |\n")
+	b.WriteString("|---------|-------------|\n")
+	b.WriteString("| `/goal <objective>` | Set a goal and keep taking turns until it is met |\n")
+	b.WriteString("| `/goal` | Show the goal and how many cycles it has used |\n")
+	b.WriteString("| `/goal pause` | Stop the loop, keeping the objective |\n")
+	b.WriteString("| `/goal resume` | Resume a paused or stopped goal |\n")
+	b.WriteString("| `/goal clear` | Drop the goal |\n")
 
 	b.WriteString("\n**Display:**\n\n")
 	b.WriteString("| Command | Description |\n")

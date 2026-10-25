@@ -37,6 +37,7 @@ type StatusRenderInput struct {
 	DiffAdded    int
 	DiffRemoved  int
 	RunCycle     *runCycleInfo   // may be nil
+	Goal         string          // goal loop indicator; empty when no goal
 	FolderName   string          // current working directory basename
 	HostName     string          // local hostname
 	LoadingItems map[string]bool // item -> done; nil means not loading
@@ -110,6 +111,7 @@ func (s *StatusModel) Render(in StatusRenderInput) string {
 	parts = append(parts, statusLocationField(in, dim, p)...)
 	parts = append(parts, s.statusToolField(p)...)
 	parts = append(parts, statusRunCycleField(in, p)...)
+	parts = append(parts, statusGoalField(in, p)...)
 
 	return bar.Render(strings.Join(parts, sep))
 }
@@ -261,6 +263,19 @@ func statusRunCycleField(in StatusRenderInput, p Palette) []string {
 	runStyle := lipgloss.NewStyle().Foreground(p.Peach)
 	return []string{runStyle.Render(fmt.Sprintf("cycle %d/%d",
 		in.RunCycle.Cycle, in.RunCycle.MaxRetries))}
+}
+
+// statusGoalField renders the /goal indicator: which cycle of the loop is
+// running, or that the goal is paused or done.
+//
+// It is shown whether or not a turn is running. A loop that keeps starting turns
+// with no visible marker is indistinguishable from an agent stuck repeating
+// itself, and the first sign of the difference would be the bill.
+func statusGoalField(in StatusRenderInput, p Palette) []string {
+	if in.Goal == "" {
+		return nil
+	}
+	return []string{lipgloss.NewStyle().Foreground(p.Mauve).Render(in.Goal)}
 }
 
 // sortedKeys returns map keys in sorted order.

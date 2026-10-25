@@ -79,9 +79,70 @@ type Meta struct {
 
 	PlanContext *PlanContext `json:"planContext,omitempty"`
 
+	// Goal is the session's /goal objective, or nil when none is set. It lives
+	// next to PlanContext rather than in the TUI's own state because a goal is
+	// a property of the work, not of the front end: resuming the session must
+	// bring the objective back, and the loop counter has to survive a restart
+	// for the same reason a resumed /run keeps its budget.
+	Goal *Goal `json:"goal,omitempty"`
+
 	// Agent records this session's place in a /run or /plan agent tree. It is
 	// absent for ordinary interactive sessions.
 	Agent *AgentContext `json:"agentContext,omitempty"`
+}
+
+// GoalStatus is where a session objective sits in its lifecycle.
+//
+// Only Active drives work. Complete is terminal: it is written by the
+// agent's goal_complete tool, and unlike Paused it is not reversible by
+// /goal resume — a finished objective that can be restarted by one command is
+// a loop waiting to happen.
+type GoalStatus string
+
+const (
+	GoalStatusActive   GoalStatus = "active"
+	GoalStatusPaused   GoalStatus = "paused"
+	GoalStatusComplete GoalStatus = "complete"
+)
+
+// MaxGoalObjectiveBytes caps the objective text. It bounds what the objective
+// costs in the system prompt on every turn, so it is measured in bytes: four
+// thousand Han characters would cost four times what four thousand ASCII ones
+// do.
+const MaxGoalObjectiveBytes = 4000
+
+// Goal is a persistent session objective the agent pursues across turns.
+//
+// The loop fields are what make this different from a prompt: Cycles counts how
+// many times /goal has re-entered the agent, so a goal that never completes
+// stops at the budget instead of running until the process dies. Turn is the
+// cycle the most recent turn belongs to — the TUI stamps it onto each cycle's
+// prompt, and the agent's goal_complete tool reports it back, so a completion
+// reported while cycle N was running cannot close a goal that cycle N+1 has
+// already reopened.
+type Goal struct {
+	Objective string     `json:"objective"`
+	Status    GoalStatus `json:"status"`
+
+	// Cycles is the number of automatic turns /goal has started for this
+	// objective. It is persisted so resuming a session continues the same
+	// budget rather than granting a fresh one.
+	Cycles int `json:"cycles,omitempty"`
+	// MaxCycles is the budget Cycles is spent against, recorded when the goal
+	// was set. Zero means the setting was not recorded; the TUI then applies
+	// its current default rather than treating the goal as unbounded.
+	MaxCycles int `json:"maxCycles,omitempty"`
+	// Turn is the cycle that most recently ran, kept so goal_complete can
+	// report which turn it belongs to.
+	Turn int `json:"turn,omitempty"`
+
+	CreatedAt int64 `json:"createdAt,omitempty"` // unix seconds
+	UpdatedAt int64 `json:"updatedAt,omitempty"`
+	// CompletedAt is when goal_complete closed the goal, zero when it has not.
+	CompletedAt int64 `json:"completedAt,omitempty"`
+	// CompletionNote is the agent's own summary of what satisfied the
+	// objective, shown once in the transcript when the goal closes.
+	CompletionNote string `json:"completionNote,omitempty"`
 }
 
 // AgentContext records where a session sits in an agent tree.
@@ -863,6 +924,41 @@ func (s *FileService) GetPlanContext(sessionID string) (*PlanContext, error) {
 	sess.mu.RLock()
 	defer sess.mu.RUnlock()
 	return sess.meta.PlanContext, nil
+}
+
+// UpdateGoal writes a session's goal to metadata. Pass nil to clear it.
+//
+// The whole struct is written, not a delta, because every field is derived from
+// one in-memory goal: the loop counter and the completion note change for
+// different reasons, and a partial update would need the two writers to
+// interleave without losing each other's edit.
+func (s *FileService) UpdateGoal(sessionID string, goal *Goal) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	sess, ok := s.sessions[sessionID]
+	if !ok {
+		return fmt.Errorf("session not found: %s", sessionID)
+	}
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	sess.meta.Goal = goal
+	sessionDir := filepath.Join(s.baseDir, sessionID)
+	return writeMeta(sessionDir, &sess.meta)
+}
+
+// GetGoal returns a session's goal, or nil when none is set.
+func (s *FileService) GetGoal(sessionID string) (*Goal, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	sess, ok := s.sessions[sessionID]
+	if !ok {
+		return nil, fmt.Errorf("session not found: %s", sessionID)
+	}
+	sess.mu.RLock()
+	defer sess.mu.RUnlock()
+	return sess.meta.Goal, nil
 }
 
 // LastSessionID returns the most recently updated session ID, or "" if none.
