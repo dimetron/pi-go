@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
@@ -360,24 +361,27 @@ func TestSessionIDRejectsUnexpectedName(t *testing.T) {
 	}
 }
 
-// readIdentity builds the "<atespace>/<name>/<uid>" header value. A partially
-// projected identity must yield nothing rather than a malformed header.
-func TestReadIdentity(t *testing.T) {
-	dir := t.TempDir()
+// Every runtime RPC must carry a bearer Authorization header, because Substrate
+// egress rewrites that header into the Actor JWT and kagent rejects a call that
+// omits it. Caller credentials must not leak into the workload call.
+func TestCallContextCarriesRuntimeActorToken(t *testing.T) {
 	client := newTestClient(t, &fakeStore{})
-	client.idDir = dir
 
-	if got := client.readIdentity(); got != "" {
-		t.Errorf("readIdentity with no files = %q, want empty", got)
+	ctx := metadata.NewIncomingContext(context.Background(), nil)
+	ctx, cancel := client.callContext(ctx)
+	defer cancel()
+
+	md, ok := metadata.FromOutgoingContext(ctx)
+	if !ok {
+		t.Fatal("callContext produced no outgoing metadata")
 	}
-
-	for field, value := range map[string]string{"atespace": "kagent", "name": testActorName, "uid": "uid-1"} {
-		if err := os.WriteFile(filepath.Join(dir, field), []byte(value), 0o600); err != nil {
-			t.Fatal(err)
+	if got, want := md.Get("authorization"), "Bearer "+RuntimeActorTokenPlaceholder; len(got) != 1 || got[0] != want {
+		t.Errorf("authorization = %v, want exactly [%q]", got, want)
+	}
+	for _, dropped := range []string{"x-user-id", "x-agent-name", "x-share-token"} {
+		if got := md.Get(dropped); len(got) != 0 {
+			t.Errorf("%s = %v, want caller credentials dropped", dropped, got)
 		}
-	}
-	if got, want := client.readIdentity(), "kagent/"+testActorName+"/uid-1"; got != want {
-		t.Errorf("readIdentity = %q, want %q", got, want)
 	}
 }
 

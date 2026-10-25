@@ -55,10 +55,12 @@ const (
 // dispatch for was accepted, so a failed send can safely be retried.
 const DispatchHeader = "x-kagent-dispatch-id"
 
-// InsecureRuntimeIdentityHeader carries atespace/actor-name/actor-UID until
-// Substrate supplies verified actor credentials. The value is
-// "<atespace>/<actor-name>/<actor-uid>".
-const InsecureRuntimeIdentityHeader = "x-kagent-insecure-runtime-identity"
+// RuntimeActorTokenPlaceholder is sent as the Authorization bearer value on
+// every runtime RPC. Substrate egress rewrites that header at the control-plane
+// origin into a short-lived Actor JWT for the kagent-runtime audience, so the
+// value is never a usable credential of its own. kagent rejects runtime calls
+// that omit the header, which is why a placeholder is sent rather than nothing.
+const RuntimeActorTokenPlaceholder = "placeholder"
 
 // Config configures a Client.
 type Config struct {
@@ -168,36 +170,21 @@ func (c *Client) SessionID(ctx context.Context) (string, error) {
 	return id, nil
 }
 
-// callContext attaches the runtime identity the task store RPCs require. It
+// callContext attaches the runtime credential the task store RPCs require. It
 // deliberately drops caller credentials: these calls are made with workload
 // authority, not a user's.
 func (c *Client) callContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(ctx)
 	md, _ := metadata.FromOutgoingContext(ctx)
 	md = md.Copy()
-	md.Delete("authorization")
 	md.Delete("x-user-id")
 	md.Delete("x-agent-name")
 	md.Delete("x-share-token")
-	if identity := c.readIdentity(); identity != "" {
-		md.Set(InsecureRuntimeIdentityHeader, identity)
-	}
+	// Substrate replaces this placeholder with the calling Actor's JWT at the
+	// control-plane origin, including after a restore or fork. kagent requires
+	// the header to be present, so an empty value fails authentication.
+	md.Set("authorization", "Bearer "+RuntimeActorTokenPlaceholder)
 	return metadata.NewOutgoingContext(ctx, md), cancel
-}
-
-// readIdentity returns "<atespace>/<name>/<uid>" from the projected identity
-// files, or "" when they are absent. Absence is not fatal: a deployment may
-// authorize the runtime by other means, and the server decides.
-func (c *Client) readIdentity() string {
-	var parts []string
-	for _, field := range []string{"atespace", identityNameFile, "uid"} {
-		raw, err := os.ReadFile(filepath.Join(c.idDir, field))
-		if err != nil {
-			return ""
-		}
-		parts = append(parts, strings.TrimSpace(string(raw)))
-	}
-	return strings.Join(parts, "/")
 }
 
 // Create persists a new task and returns its committed version. The gateway's
