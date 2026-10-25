@@ -1,14 +1,20 @@
 {
   "compilerOptions": {
     "target": "ES2020",
-    "module": "commonjs",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
     "lib": ["ES2020"],
-    "moduleResolution": "node",
     "rootDir": "src",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "outDir": "dist"
+    "outDir": "dist",
+    // TypeScript 7 dropped `moduleResolution: "node"` (node10), so the
+    // extension host resolves with nodenext instead. That is also the first
+    // release to stop auto-including @types/* under nodenext, so the node
+    // globals the host relies on (Buffer, node:child_process, WritableStream)
+    // have to be named explicitly.
+    "types": ["node"]
   },
   "include": ["src/**/*"],
   "exclude": ["src/webview"]

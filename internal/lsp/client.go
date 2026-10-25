@@ -193,7 +193,10 @@ func (c *Client) Close() error {
 		return err
 	case <-time.After(5 * time.Second):
 		_ = c.cmd.Process.Kill()
-		<-waitDone
+		// No receive on waitDone here: it is buffered, so the Wait goroutine
+		// completes and the child is reaped whether or not anyone reads the
+		// result. Reading it would only discard the error, which errcheck and
+		// staticcheck disagree about how to spell.
 		select {
 		case <-c.done:
 		default:
