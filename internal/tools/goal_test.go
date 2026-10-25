@@ -122,3 +122,36 @@ func TestCoreTools_GoalIsOptIn(t *testing.T) {
 			len(withGoal), len(base))
 	}
 }
+
+// A nil controller is the "goal tool was not registered" case: every method must
+// be a no-op rather than a panic, because print/JSON modes and unit tests call
+// these without wiring one.
+func TestGoalController_NilSafety(t *testing.T) {
+	var c *GoalController
+	c.SetGoalState(GoalState{Active: true}) // must not panic
+	if _, ok := c.TakeCompletion(); ok {
+		t.Error("TakeCompletion on a nil controller reported a completion")
+	}
+}
+
+// A report with no summary still completes: the model is told to send one, but a
+// missing summary must not turn a genuine completion into a rejection.
+func TestGoalController_CompleteWithoutSummary(t *testing.T) {
+	c := &GoalController{}
+	c.SetGoalState(GoalState{Active: true, Turn: 1})
+
+	out, err := c.Complete(GoalCompleteInput{Cycle: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.Acknowledged {
+		t.Fatalf("report with no summary was rejected: %q", out.Content)
+	}
+	ev, ok := c.TakeCompletion()
+	if !ok {
+		t.Fatal("completion was not recorded")
+	}
+	if ev.Summary != "" {
+		t.Errorf("Summary = %q, want empty for a report that gave none", ev.Summary)
+	}
+}

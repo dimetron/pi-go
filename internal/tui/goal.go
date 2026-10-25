@@ -152,22 +152,31 @@ func (m *model) pauseGoal() {
 	m.syncGoalPrompt()
 }
 
-// resumeGoal puts a paused goal back into the loop and starts a turn if the UI is
-// idle, so resuming is one keystroke rather than a command plus a prompt.
+// resumeGoal puts a paused or stopped goal back into the loop and starts a turn if
+// the UI is idle, so resuming is one keystroke rather than a command plus a prompt.
+//
+// "Stopped" is the third state this has to handle: Esc and the cycle budget both
+// leave the goal Active and set goalCanceled, so a status check alone would answer
+// "/goal already active" to the one command the stop message tells the user to run.
 func (m *model) resumeGoal() (tea.Model, tea.Cmd) {
 	switch {
 	case m.goal == nil:
 		m.chatModel.AppendMeta("No goal is set. /goal <objective> to set one.")
 		return m, nil
-	case m.goal.Status == pisession.GoalStatusActive:
+	case m.goal.Status == pisession.GoalStatusActive && !m.goalCanceled:
 		m.chatModel.AppendMeta("Goal already active.")
 		return m, nil
 	}
 	m.goal.Status = pisession.GoalStatusActive
 	m.goal.UpdatedAt = time.Now().Unix()
 	// Resuming is a decision to keep going, so a loop stopped by Esc or by the
-	// cycle budget is re-armed here. The budget is left as spent: /goal set is
-	// the way to ask for more.
+	// cycle budget is re-armed here. A budget spent to the limit is topped up
+	// instead of leaving the goal unstartable: /goal resume is the message the
+	// stop notice prints, so it has to be the thing that works. The added budget is
+	// exactly one more round, which keeps the cap a cap rather than a suggestion.
+	if m.goal.Cycles >= goalMaxCycles(m.goal.MaxCycles) {
+		m.goal.MaxCycles = m.goal.Cycles + defaultGoalMaxCycles
+	}
 	m.goalCanceled = false
 	m.chatModel.AppendMeta("Goal resumed.")
 	m.persistGoal()
@@ -288,30 +297,6 @@ func (m *model) publishGoalState() {
 		Turn:      m.goalTurn(),
 		MaxCycles: maxCycles,
 	})
-}
-
-// goalIndicatorText is the status-bar fragment for the goal loop, empty when no
-// goal is set. It reports the cycle as well as the objective because a loop that
-// is spending turns is something the user needs to see while it happens, not
-// afterwards in the transcript.
-func (m *model) goalIndicatorText() string {
-	if m.goal == nil {
-		return ""
-	}
-	objective := truncatePlain(m.goal.Objective, 32)
-	switch m.goal.Status {
-	case pisession.GoalStatusActive:
-		maxCycles := goalMaxCycles(m.goal.MaxCycles)
-		if m.goal.Cycles > 0 {
-			return fmt.Sprintf("goal %d/%d: %s", m.goal.Cycles, maxCycles, objective)
-		}
-		return "goal: " + objective
-	case pisession.GoalStatusPaused:
-		return "goal paused: " + objective
-	case pisession.GoalStatusComplete:
-		return "goal done: " + objective
-	}
-	return ""
 }
 
 // truncatePlain shortens s to at most n runes plus an ellipsis, collapsing

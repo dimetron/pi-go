@@ -1827,6 +1827,11 @@ func (m *model) sidebarRenderInput(sidebarWidth, panelRows int) SidebarRenderInp
 		Artifacts:     m.artifactList(),
 		Palette:       m.palette,
 	}
+	if m.goal != nil {
+		in.Goal = m.goal
+		in.GoalMaxCycles = goalMaxCycles(m.goal.MaxCycles)
+		in.GoalStopped = m.goalCanceled
+	}
 	if m.run != nil && m.run.phase != "" {
 		in.RunChecklist = m.run.checklist
 		in.RunPhase = m.run.phase
@@ -2269,7 +2274,6 @@ func (m *model) statusRenderInput() StatusRenderInput {
 		DiffAdded:    m.diffAdded,
 		DiffRemoved:  m.diffRemoved,
 		RunCycle:     rc,
-		Goal:         m.goalIndicatorText(),
 		FolderName:   sidebarFolderName(m.cwd()),
 		HostName:     hostName,
 		LoadingItems: m.loadingItems,
