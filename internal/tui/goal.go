@@ -25,17 +25,27 @@ import (
 // notice and large enough to finish real work.
 const defaultGoalMaxCycles = 8
 
-// goalMaxCycles resolves the loop budget: PI_GOAL_MAX_CYCLES, then the value
-// recorded when the goal was set, then the default. Same shape as
-// planMaxFixCycles, so an operator who knows one knows the other.
+// goalMaxCycles resolves the loop budget: the larger of PI_GOAL_MAX_CYCLES and the
+// value recorded when the goal was set, falling back to the default when neither is
+// set. Same shape as planMaxFixCycles, so an operator who knows one knows the other.
+//
+// Larger-wins rather than env-wins because each value is a user asking for that many
+// turns, and the only way the two disagree after a /goal resume is that the resume
+// deliberately renewed a spent budget. Taking the larger honors that request while
+// still letting an operator raise the cap mid-session. It also keeps /goal resume
+// from being a no-op under the override, which is what a strict env-wins order made
+// it.
 func goalMaxCycles(recorded int) int {
+	env := 0
 	if v := strings.TrimSpace(os.Getenv("PI_GOAL_MAX_CYCLES")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			return n
+			env = n
 		}
 	}
-	if recorded > 0 {
-		return recorded
+	// The default applies only when neither was asked for; it must not raise a
+	// recorded budget, or /goal set with PI_GOAL_MAX_CYCLES=2 would quietly grant 8.
+	if budget := max(env, recorded); budget > 0 {
+		return budget
 	}
 	return defaultGoalMaxCycles
 }
@@ -70,6 +80,11 @@ func (m *model) setGoal(objective string) {
 		UpdatedAt: now,
 	}
 	m.goalCanceled = false
+	// A report the previous objective's turn accepted is still sitting in the
+	// tool's slot if the turn was stopped before turn-end drained it. It describes
+	// work the new objective never asked for, so it is dropped rather than left for
+	// beginGoalCycle to consume on the new goal's first cycle.
+	m.takeGoalCompletion()
 	if prevCreated == 0 {
 		m.chatModel.AppendMeta("Goal set: " + objective)
 	} else {
@@ -104,7 +119,10 @@ func (m *model) syncGoalPrompt() {
 	if m.cfg.Agent == nil {
 		return
 	}
-	base := agent.LoadInstruction(agent.SystemInstruction)
+	base := m.cfg.BaseInstruction
+	if base == "" {
+		base = agent.LoadInstruction(agent.SystemInstruction)
+	}
 	if err := m.cfg.Agent.RebuildWithInstruction(
 		agent.AppendActiveGoal(base, m.goal, m.goalTurn()),
 	); err != nil {
@@ -130,6 +148,7 @@ func (m *model) clearGoal() {
 	}
 	m.goal = nil
 	m.goalCanceled = true
+	m.takeGoalCompletion()
 	m.chatModel.AppendMeta("Goal cleared.")
 	m.persistGoal()
 	m.syncGoalPrompt()
@@ -144,9 +163,19 @@ func (m *model) pauseGoal() {
 	case m.goal.Status == pisession.GoalStatusPaused:
 		m.chatModel.AppendMeta("Goal already paused.")
 		return
+	case m.goal.Status == pisession.GoalStatusComplete:
+		// Complete is terminal for every command, not just resume: pausing a
+		// finished goal is the first step of the restart resume used to allow.
+		m.chatModel.AppendMeta("Goal already complete. /goal <objective> to set a new one.")
+		return
 	}
 	m.goal.Status = pisession.GoalStatusPaused
 	m.goal.UpdatedAt = time.Now().Unix()
+	// Stop the loop as well as relabel it. continueGoalLoop keys off goalActive and
+	// goalCanceled, not the status, so a paused goal that left goalCanceled false
+	// would still start its next cycle from handleAgentDone — the pause would take
+	// effect only after the turn it was meant to stop.
+	m.goalCanceled = true
 	m.chatModel.AppendMeta("Goal paused. /goal resume to continue pursuing it.")
 	m.persistGoal()
 	m.syncGoalPrompt()
@@ -163,6 +192,13 @@ func (m *model) resumeGoal() (tea.Model, tea.Cmd) {
 	case m.goal == nil:
 		m.chatModel.AppendMeta("No goal is set. /goal <objective> to set one.")
 		return m, nil
+	case m.goal.Status == pisession.GoalStatusComplete:
+		// Complete is terminal by design: a finished objective that one command
+		// can restart is a loop waiting to happen, and the completion was the
+		// agent's report that the work is done. A new /goal is the way to ask for
+		// more, and it is one line.
+		m.chatModel.AppendMeta("Goal already complete. /goal <objective> to set a new one.")
+		return m, nil
 	case m.goal.Status == pisession.GoalStatusActive && !m.goalCanceled:
 		m.chatModel.AppendMeta("Goal already active.")
 		return m, nil
@@ -172,8 +208,12 @@ func (m *model) resumeGoal() (tea.Model, tea.Cmd) {
 	// Resuming is a decision to keep going, so a loop stopped by Esc or by the
 	// cycle budget is re-armed here. A budget spent to the limit is topped up
 	// instead of leaving the goal unstartable: /goal resume is the message the
-	// stop notice prints, so it has to be the thing that works. The added budget is
-	// exactly one more round, which keeps the cap a cap rather than a suggestion.
+	// stop notice prints, so it has to be the thing that works.
+	//
+	// The renewal has to clear the effective budget, not just the recorded one:
+	// goalMaxCycles takes the larger of the two, so a recorded bump alone is enough
+	// today, and computing the top-up from the effective value keeps it that way if
+	// the precedence ever changes.
 	if m.goal.Cycles >= goalMaxCycles(m.goal.MaxCycles) {
 		m.goal.MaxCycles = m.goal.Cycles + defaultGoalMaxCycles
 	}
@@ -198,7 +238,11 @@ func (m *model) beginGoalCycle() (tea.Model, tea.Cmd) {
 	// completion can be attributed to, and consuming it here — rather than when
 	// the tool call returns — means a report cannot close the goal and then be
 	// overwritten by the loop's own bookkeeping.
-	if ev, ok := m.takeGoalCompletion(); ok {
+	// The report must name the cycle that just ran. The tool already checked this
+	// against the state it was given, but that state is republished between turns,
+	// so re-checking here is what makes a report that survived a stop unable to
+	// close a goal it did not work on.
+	if ev, ok := m.takeGoalCompletion(); ok && ev.Cycle == m.goal.Turn {
 		note := ev.Summary
 		if note == "" {
 			note = "the objective is met"
@@ -414,4 +458,19 @@ func (m *model) continueGoalLoop(turnErr error) (tea.Model, tea.Cmd) {
 	}
 	m.publishGoalState()
 	return m.beginGoalCycle()
+}
+
+// isGoalControlCommand reports whether input is a /goal sub-command that stops the
+// loop, which is allowed through while a turn is running.
+//
+// Only the stopping forms qualify. `/goal <objective>` and the bare `/goal` status
+// card replace or report state, and letting those through mid-turn would let a
+// keystroke swap the objective out from under the turn that is working on it.
+// Resume is excluded for the same reason as set: the loop is already running.
+func isGoalControlCommand(input string) bool {
+	fields := strings.Fields(strings.ToLower(input))
+	if len(fields) != 2 || fields[0] != "/goal" {
+		return false
+	}
+	return fields[1] == "pause" || fields[1] == "clear"
 }

@@ -928,6 +928,15 @@ func (s *FileService) GetPlanContext(sessionID string) (*PlanContext, error) {
 
 // UpdateGoal writes a session's goal to metadata. Pass nil to clear it.
 //
+// The value is copied on the way in, and GetGoal copies it on the way out, so the
+// service owns the metadata it holds. Storing the caller's pointer aliased the
+// TUI's live goal into the session: the TUI mutates that struct without the
+// FileService locks — a `/goal pause` typed while Esc's canceled agent is still
+// draining is the easy case — and AppendEvent marshals the whole meta concurrently
+// under those locks. The race was between a goal field write and AppendEvent's
+// writeMeta, and copying at both boundaries is what removes it rather than making
+// it rarer.
+//
 // The whole struct is written, not a delta, because every field is derived from
 // one in-memory goal: the loop counter and the completion note change for
 // different reasons, and a partial update would need the two writers to
@@ -942,12 +951,16 @@ func (s *FileService) UpdateGoal(sessionID string, goal *Goal) error {
 	}
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
-	sess.meta.Goal = goal
+	sess.meta.Goal = cloneGoal(goal)
 	sessionDir := filepath.Join(s.baseDir, sessionID)
 	return writeMeta(sessionDir, &sess.meta)
 }
 
-// GetGoal returns a session's goal, or nil when none is set.
+// GetGoal returns a copy of a session's goal, or nil when none is set.
+//
+// A copy, not the stored pointer: a caller that mutated the returned struct would
+// otherwise change metadata it never told the service about, which is the same
+// aliasing problem UpdateGoal avoids from the other side.
 func (s *FileService) GetGoal(sessionID string) (*Goal, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -958,7 +971,16 @@ func (s *FileService) GetGoal(sessionID string) (*Goal, error) {
 	}
 	sess.mu.RLock()
 	defer sess.mu.RUnlock()
-	return sess.meta.Goal, nil
+	return cloneGoal(sess.meta.Goal), nil
+}
+
+// cloneGoal copies a goal, preserving nil.
+func cloneGoal(g *Goal) *Goal {
+	if g == nil {
+		return nil
+	}
+	c := *g
+	return &c
 }
 
 // LastSessionID returns the most recently updated session ID, or "" if none.

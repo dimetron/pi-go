@@ -416,14 +416,15 @@ func deferredInit(
 			SystemNoticeCh:    noticeCh,
 			ContextBreakdown: buildContextBreakdown(
 				instructionParts, coreTools, mcpToolsets, ps.skills, ps.agentConfigs),
-			TokenTracker:   tokenTracker,
-			CompactMetrics: cbs.compactMetrics,
-			GitBranch:      ps.gitBranch,
-			DiffAdded:      ps.diffAdded,
-			DiffRemoved:    ps.diffRemoved,
-			GoalTool:       res.goalTool,
-			MCPToolsets:    ps.mcpToolsets,
-			MCPServers:     buildMCPServerConfigs(cfg),
+			TokenTracker:    tokenTracker,
+			CompactMetrics:  cbs.compactMetrics,
+			GitBranch:       ps.gitBranch,
+			DiffAdded:       ps.diffAdded,
+			DiffRemoved:     ps.diffRemoved,
+			GoalTool:        res.goalTool,
+			BaseInstruction: instruction,
+			MCPToolsets:     ps.mcpToolsets,
+			MCPServers:      buildMCPServerConfigs(cfg),
 		},
 	}
 

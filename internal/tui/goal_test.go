@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dimetron/pi-go/internal/agent"
 	pisession "github.com/dimetron/pi-go/internal/session"
 	"github.com/dimetron/pi-go/internal/tools"
 )
@@ -135,6 +136,141 @@ func TestResumeGoal_ReArmsAStoppedLoop(t *testing.T) {
 			t.Error("resume on a running goal started a second turn")
 		}
 	})
+}
+
+// Complete is terminal: a finished objective that one command can restart is a
+// loop waiting to happen, which the PR advertises as a guarantee.
+func TestCompletedGoalIsTerminal(t *testing.T) {
+	for _, cmd := range [][]string{{"resume"}, {"pause"}} {
+		m := goalTestModel(t, pisession.GoalStatusComplete)
+		m.goal.Cycles = 4
+
+		if _, teaCmd := m.handleGoalCommand(cmd); teaCmd != nil {
+			t.Errorf("/goal %s on a completed goal started a turn", cmd[0])
+		}
+		if m.goal.Status != pisession.GoalStatusComplete {
+			t.Errorf("/goal %s changed a completed goal to %q", cmd[0], m.goal.Status)
+		}
+	}
+}
+
+// A pending report belongs to the objective whose turn produced it. If the turn is
+// stopped before turn-end drains it, the report must not close a goal the user set
+// afterwards.
+func TestStaleCompletionDoesNotCrossObjectives(t *testing.T) {
+	m := goalTestModel(t, pisession.GoalStatusActive)
+	m.goal.Cycles, m.goal.Turn = 1, 1
+	m.cfg.GoalTool.SetGoalState(tools.GoalState{Active: true, Turn: 1})
+	if _, err := m.cfg.GoalTool.Complete(tools.GoalCompleteInput{Cycle: 1, Summary: "old work"}); err != nil {
+		t.Fatalf("goal_complete: %v", err)
+	}
+
+	// Esc before the turn ends, then set a different objective.
+	m.cancelAgent()
+	m.handleGoalCommand([]string{"a", "new", "objective"})
+
+	m.beginGoalCycle()
+	if m.goal.Status == pisession.GoalStatusComplete {
+		t.Fatalf("the previous objective's report closed the new goal: note %q", m.goal.CompletionNote)
+	}
+}
+
+// /goal pause has to stop the loop at the turn boundary. Relabelling the status is
+// not enough: continueGoalLoop reads goalCanceled, so the loop would start another
+// cycle past the pause.
+func TestPauseStopsTheLoopAtTheTurnBoundary(t *testing.T) {
+	m := goalTestModel(t, pisession.GoalStatusActive)
+	m.goal.Cycles, m.goal.Turn = 1, 1
+	m.cfg.GoalTool.SetGoalState(tools.GoalState{Active: true, Turn: 1})
+
+	m.handleGoalCommand([]string{"pause"})
+
+	if !m.goalCanceled {
+		t.Fatal("pause left goalCanceled false; handleAgentDone would start another cycle")
+	}
+	m.running = false
+	if _, cmd := m.handleAgentDone(agentDoneMsg{}); cmd != nil {
+		t.Error("handleAgentDone started a cycle after /goal pause")
+	}
+}
+
+// The loop starts its next cycle from handleAgentDone, before the event loop reads
+// another keystroke, so pause and clear have to be dispatchable while a turn runs.
+func TestGoalControlCommandsReachTheRunningLoop(t *testing.T) {
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		{"/goal pause", true},
+		{"/goal clear", true},
+		{"/GOAL PAUSE", true},
+		{"/goal", false},
+		{"/goal resume", false},
+		{"/goal keep the tests green", false},
+		{"/goal pause the flaky test", false},
+		{"/clear", false},
+	}
+	for _, tc := range tests {
+		if got := isGoalControlCommand(tc.input); got != tc.want {
+			t.Errorf("isGoalControlCommand(%q) = %v, want %v", tc.input, got, tc.want)
+		}
+	}
+
+	// And the dispatch actually lets one through while running.
+	m := goalTestModel(t, pisession.GoalStatusActive)
+	m.running = true
+	m.handleInputSubmit(InputSubmitMsg{Text: "/goal pause"})
+	if m.goal.Status != pisession.GoalStatusPaused {
+		t.Errorf("Status = %q after /goal pause during a turn, want paused", m.goal.Status)
+	}
+}
+
+// PI_GOAL_MAX_CYCLES outranks the recorded budget, so a resume that only raised
+// MaxCycles would be a no-op under the override: every attempt stops again at the
+// environment limit.
+func TestResumeRenewsTheBudgetUnderAnEnvOverride(t *testing.T) {
+	t.Setenv("PI_GOAL_MAX_CYCLES", "2")
+	m := goalTestModel(t, pisession.GoalStatusActive)
+	m.goal.MaxCycles = 2
+	m.goal.Cycles, m.goal.Turn = 2, 2
+	m.goalCanceled = true
+
+	if _, cmd := m.handleGoalCommand([]string{"resume"}); cmd == nil {
+		t.Fatalf("resume under PI_GOAL_MAX_CYCLES=2 queued no turn: Cycles=%d MaxCycles=%d effective=%d",
+			m.goal.Cycles, m.goal.MaxCycles, goalMaxCycles(m.goal.MaxCycles))
+	}
+	if got := goalMaxCycles(m.goal.MaxCycles); got <= m.goal.Cycles-1 {
+		t.Errorf("effective budget = %d with Cycles = %d: the renewed goal cannot run", got, m.goal.Cycles)
+	}
+}
+
+// --system replaces the built-in instruction. Rebuilding the goal prompt from
+// agent.SystemInstruction instead of the configured base silently discards it.
+func TestGoalPromptKeepsTheConfiguredInstruction(t *testing.T) {
+	// A real agent, because the assertion is about what RebuildWithInstruction
+	// actually installs — a stub would only prove the stub was called.
+	a, err := agent.New(agent.Config{
+		Model:       &goalLoopLLM{name: "instruction"},
+		Instruction: "CUSTOM SYSTEM PROMPT",
+	})
+	if err != nil {
+		t.Fatalf("agent.New: %v", err)
+	}
+	m := newTestModel(t)
+	m.cfg.Agent = a
+	m.cfg.GoalTool = &tools.GoalController{}
+	m.cfg.BaseInstruction = "CUSTOM SYSTEM PROMPT"
+	m.goal = &pisession.Goal{Objective: "ship it", Status: pisession.GoalStatusActive, MaxCycles: 3, Cycles: 1, Turn: 1}
+
+	m.syncGoalPrompt()
+
+	got := m.cfg.Agent.Instruction()
+	if !strings.Contains(got, "CUSTOM SYSTEM PROMPT") {
+		t.Errorf("the configured instruction was discarded; prompt = %q", got)
+	}
+	if !strings.Contains(got, "Current Goal") {
+		t.Errorf("the goal section was not appended; prompt = %q", got)
+	}
 }
 
 // beginGoalCycle is the loop counter, so its arithmetic is the budget.
@@ -424,10 +560,14 @@ func TestGoalMaxCycles(t *testing.T) {
 	if got := goalMaxCycles(5); got != 5 {
 		t.Errorf("goalMaxCycles(5) = %d, want the recorded 5", got)
 	}
-	// The env var wins over both, so an operator can raise the budget mid-session.
+	// Larger wins, so an operator can raise the budget mid-session and a resume that
+	// renewed a spent budget is not undone by a smaller override.
 	t.Setenv("PI_GOAL_MAX_CYCLES", "12")
 	if got := goalMaxCycles(5); got != 12 {
 		t.Errorf("goalMaxCycles(5) with PI_GOAL_MAX_CYCLES=12 = %d, want 12", got)
+	}
+	if got := goalMaxCycles(30); got != 30 {
+		t.Errorf("goalMaxCycles(30) with PI_GOAL_MAX_CYCLES=12 = %d, want the recorded 30", got)
 	}
 	// Garbage and non-positive values fall through rather than disabling the loop.
 	for _, bad := range []string{"abc", "0", "-3", "  "} {

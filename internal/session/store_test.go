@@ -2490,6 +2490,42 @@ func TestGoal_RoundTrip(t *testing.T) {
 	}
 }
 
+// The service must own the goal it stores. Handing it a live pointer let the TUI
+// mutate session metadata without the FileService locks, while AppendEvent
+// marshaled the same struct concurrently — a real race, reproduced under -race by
+// mutating the goal after UpdateGoal returns.
+func TestGoal_CopiesAtBothBoundaries(t *testing.T) {
+	svc := newTestService(t)
+	sid := createTestSession(t, svc)
+
+	live := &Goal{Objective: "original", Status: GoalStatusActive, Cycles: 1}
+	if err := svc.UpdateGoal(sid, live); err != nil {
+		t.Fatalf("UpdateGoal: %v", err)
+	}
+
+	// Mutating the caller's struct must not change what the service holds.
+	live.Objective = "mutated after update"
+	live.Cycles = 99
+
+	got, err := svc.GetGoal(sid)
+	if err != nil {
+		t.Fatalf("GetGoal: %v", err)
+	}
+	if got.Objective != "original" || got.Cycles != 1 {
+		t.Errorf("stored goal = %+v, want the values as they were at UpdateGoal time", got)
+	}
+
+	// And mutating what GetGoal returned must not change it either.
+	got.Objective = "mutated via GetGoal"
+	again, err := svc.GetGoal(sid)
+	if err != nil {
+		t.Fatalf("GetGoal: %v", err)
+	}
+	if again.Objective != "original" {
+		t.Errorf("stored goal = %q, want the caller's edit to GetGoal's result to be invisible", again.Objective)
+	}
+}
+
 // An unknown session is an error, not a silent nil: the caller has to know its
 // write went nowhere.
 func TestGoal_UnknownSession(t *testing.T) {

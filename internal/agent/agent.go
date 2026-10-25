@@ -553,6 +553,16 @@ func (a *Agent) RebuildWithInstruction(instruction string) error {
 	return nil
 }
 
+// Instruction returns the system instruction the agent currently runs with.
+//
+// It reports what was last built, after any RebuildWithInstruction. The /goal loop
+// uses it to prove a rebuild kept the configured base prompt rather than reloading
+// the default over it — a distinction that is invisible from outside until a
+// --system user loses their prompt.
+func (a *Agent) Instruction() string {
+	return a.config.Instruction
+}
+
 // RebuildWithModel recreates the agent's internal runner with a new LLM while
 // preserving all other configuration (tools, callbacks, instruction, session).
 // The session service is reused so existing sessions remain accessible.

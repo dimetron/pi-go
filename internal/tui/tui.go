@@ -764,7 +764,13 @@ func (m *model) handleKeyPressMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool
 // mean.
 func (m *model) handleInputSubmit(msg InputSubmitMsg) (tea.Model, tea.Cmd, bool) {
 	if strings.HasPrefix(msg.Text, "/") {
-		if m.running {
+		// The goal controls are the exception to "no slash commands while a turn
+		// runs". The loop starts its next cycle from handleAgentDone, before the
+		// event loop sees another keystroke, so dropping /goal pause or /goal clear
+		// here made both unreachable until the budget was spent — the user could see
+		// the cycle counter climbing and have no way to stop it. Pause and clear take
+		// effect at the turn boundary, which is what stopping a loop means anyway.
+		if m.running && !isGoalControlCommand(msg.Text) {
 			return m, nil, true
 		}
 		model, cmd := m.handleSlashCommand(msg.Text)
@@ -2453,6 +2459,7 @@ func (m *model) handleInitEvent(msg initEventMsg) (tea.Model, tea.Cmd) {
 		m.diffAdded = r.DiffAdded
 		m.diffRemoved = r.DiffRemoved
 		m.cfg.GoalTool = r.GoalTool
+		m.cfg.BaseInstruction = r.BaseInstruction
 		m.cfg.MCPToolsets = r.MCPToolsets
 		m.cfg.MCPServers = r.MCPServers
 
