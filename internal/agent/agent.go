@@ -553,6 +553,16 @@ func (a *Agent) RebuildWithInstruction(instruction string) error {
 	return nil
 }
 
+// Instruction returns the system instruction the agent currently runs with.
+//
+// It reports what was last built, after any RebuildWithInstruction. The /goal loop
+// uses it to prove a rebuild kept the configured base prompt rather than reloading
+// the default over it — a distinction that is invisible from outside until a
+// --system user loses their prompt.
+func (a *Agent) Instruction() string {
+	return a.config.Instruction
+}
+
 // RebuildWithModel recreates the agent's internal runner with a new LLM while
 // preserving all other configuration (tools, callbacks, instruction, session).
 // The session service is reused so existing sessions remain accessible.
@@ -944,6 +954,64 @@ func appendSkillsMenu(skills []extension.Skill) string {
 //	\n\n# Active Skill: <name>\n\n<body>\n
 func AppendActiveSkill(prompt string, skill extension.Skill, body string) string {
 	return prompt + fmt.Sprintf("\n\n# Active Skill: %s\n\n%s\n", skill.Name, body)
+}
+
+// ValidateGoalObjective checks an objective before it becomes a session goal.
+//
+// The cap is on bytes, not runes: the objective is re-sent in the system prompt
+// on every turn of the loop, so what it costs is the thing being bounded.
+func ValidateGoalObjective(objective string) error {
+	if strings.TrimSpace(objective) == "" {
+		return fmt.Errorf("goal objective must not be empty")
+	}
+	if len(objective) > pisession.MaxGoalObjectiveBytes {
+		return fmt.Errorf("goal objective must be at most %d bytes (got %d)",
+			pisession.MaxGoalObjectiveBytes, len(objective))
+	}
+	return nil
+}
+
+// AppendActiveGoal returns prompt with a "# Current Goal" section describing the
+// objective and how to declare it met.
+//
+// The completion instruction is the whole reason this block exists: the loop
+// restarts the agent when a turn ends with the goal still active, so an agent
+// that finishes the work without saying so buys itself another turn. Telling it
+// the exact tool and the exact cycle is what makes one well-behaved loop
+// possible — the agent cannot know from its own context which cycle it is in,
+// and a completion reported against the wrong cycle is rejected.
+//
+// cycle is the loop iteration this prompt belongs to, as recorded in
+// GoalContext.Turn. When the goal is not active, or a caller has no cycle to
+// report (0), nothing is appended: a completed objective must not be able to
+// drag the agent back into work.
+func AppendActiveGoal(prompt string, goal *pisession.Goal, cycle int) string {
+	if goal == nil || goal.Status != pisession.GoalStatusActive || goal.Objective == "" {
+		return prompt
+	}
+
+	var b strings.Builder
+	b.WriteString(prompt)
+	b.WriteString("\n\n# Current Goal\n\n")
+	b.WriteString("The user set a goal for this session, and a turn that ends with the goal\n")
+	b.WriteString("still active is followed automatically by another one. The goal is:\n\n")
+	b.WriteString("> ")
+	b.WriteString(goal.Objective)
+	b.WriteString("\n\n")
+	b.WriteString("Work toward it until it is met. When it is, call the `goal_complete` tool:\n")
+	if cycle > 0 {
+		fmt.Fprintf(&b, "pass cycle=%d (this turn is cycle %d)", cycle, cycle)
+		if goal.MaxCycles > 0 {
+			fmt.Fprintf(&b, " of at most %d", goal.MaxCycles)
+		}
+		b.WriteString(" and a one-line summary of what satisfied it.\n")
+	} else {
+		b.WriteString("pass a one-line summary of what satisfied it.\n")
+	}
+	b.WriteString("Do not call it while any part of the objective is still open, and do not\n")
+	b.WriteString("report completion on the user's behalf: an objective you cannot satisfy\n")
+	b.WriteString("should be left active so the next turn can continue it.\n")
+	return b.String()
 }
 
 type contextFile struct {

@@ -9,6 +9,7 @@ import (
 	"github.com/dimetron/pi-go/internal/logger"
 	pisession "github.com/dimetron/pi-go/internal/session"
 	"github.com/dimetron/pi-go/internal/subagent"
+	"github.com/dimetron/pi-go/internal/tools"
 
 	llmmodel "google.golang.org/adk/v2/model"
 	adktool "google.golang.org/adk/v2/tool"
@@ -67,6 +68,18 @@ type Config struct {
 	// fed back to the planner as its next prompt instead of waiting for a human
 	// turn. Bounded by maxPlanFixCycles.
 	PlanAutoFix bool
+	// GoalTool is the shared state of the goal_complete tool, or nil when the
+	// tool was not registered. The /goal loop reads the completions the agent
+	// reports through it and publishes the running cycle back, so the two agree on
+	// which turn is running without either reaching into the other's structure.
+	GoalTool *tools.GoalController
+	// BaseInstruction is the system instruction the session was configured with,
+	// before any goal section was appended. The /goal loop rebuilds the agent's
+	// instruction each cycle and must rebuild it from this rather than from
+	// agent.SystemInstruction: --system replaces the built-in outright, so reloading
+	// the default would discard the user's own prompt the first time a goal was set
+	// and never put it back. Empty falls back to the default.
+	BaseInstruction string
 	// LifecycleHooks are shell-command hooks fired on agent lifecycle events
 	// (turn_complete, user_input_required). Each carries the event name and a
 	// small data payload as JSON on stdin. Nil disables lifecycle hooks.
@@ -128,6 +141,17 @@ type InitResult struct {
 	GitBranch         string
 	DiffAdded         int
 	DiffRemoved       int
+	// GoalTool is the shared goal_complete controller, nil when the tool was not
+	// registered. It is handed over on the same deferred-init path as the other
+	// late-built subsystems, because the tool is built alongside the tool set.
+	GoalTool *tools.GoalController
+	// BaseInstruction is the system instruction the session was configured with,
+	// before any goal or skill section was appended. The /goal loop rebuilds the
+	// agent's instruction each cycle, and it has to rebuild it from this rather
+	// than from agent.SystemInstruction: --system replaces the built-in outright, so
+	// reloading the default would silently discard the user's own prompt the first
+	// time a goal was set, and never put it back.
+	BaseInstruction string
 	// MCPToolsets holds the live MCP toolsets for /mcp status display.
 	MCPToolsets []adktool.Toolset
 	// MCPServers holds the configured MCP server definitions.

@@ -3,10 +3,12 @@ package tui
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"google.golang.org/adk/v2/session"
 
 	"github.com/dimetron/pi-go/internal/agent"
+	pisession "github.com/dimetron/pi-go/internal/session"
 )
 
 // restoreTranscript rebuilds the visible chat transcript from a resumed
@@ -128,5 +130,43 @@ func (m *model) restoreSession() {
 		); estErr == nil && est > 0 {
 			tt.SetLastPromptTokens(int64(est))
 		}
+	}
+}
+
+// restoreGoal reloads a resumed session's goal.
+//
+// The loop is deliberately not restarted here. A resume is the user deciding to
+// return to a session, not deciding to spend another turn on it, and a goal that
+// was mid-loop when the process died would otherwise restart work on startup
+// before a single keystroke was read. The goal is armed instead, and says so.
+func (m *model) restoreGoal() {
+	svc := m.cfg.SessionService
+	if svc == nil || m.cfg.SessionID == "" {
+		return
+	}
+	goal, err := svc.GetGoal(m.cfg.SessionID)
+	if err != nil {
+		m.cfg.Logger.Errorf("loading goal: %v", err)
+		return
+	}
+	if goal == nil {
+		return
+	}
+	m.goal = goal
+	m.goalCanceled = true
+	m.syncGoalPrompt()
+	m.publishGoalState()
+
+	objective := truncatePlain(goal.Objective, 120)
+	switch goal.Status {
+	case pisession.GoalStatusActive:
+		m.chatModel.AppendMeta(fmt.Sprintf(
+			"Loaded goal from cycle %d of %d: %s\n/goal resume to keep going | /goal clear to drop it",
+			goal.Cycles, goalMaxCycles(goal.MaxCycles), objective))
+	case pisession.GoalStatusPaused:
+		m.chatModel.AppendMeta(fmt.Sprintf(
+			"Loaded a paused goal: %s\n/goal resume to continue", objective))
+	case pisession.GoalStatusComplete:
+		m.chatModel.AppendMeta("Loaded a completed goal: " + objective)
 	}
 }

@@ -376,6 +376,7 @@ reconstruct the text; that is how every consumer uses it.
 | `/history`      | Show command history                                     |
 | `/plan`         | Start a Plan-Driven Development (PDD) session (auto-resumes if a spec exists) |
 | `/run`          | Execute a spec with task agent                           |
+| `/goal`         | Set an objective and keep taking turns until it is met (see below) |
 | `/skill-create` | Create a new skill                                       |
 | `/skill-list`   | List available skills                                    |
 | `/skill-load`   | Reload skills from disk                                  |
@@ -383,6 +384,37 @@ reconstruct the text; that is how every consumer uses it.
 | `/audit`        | Scan skills for hidden Unicode threats                   |
 | `/clear`        | Clear conversation                                       |
 | `/exit`         | Exit the agent                                           |
+
+### Goals: work that outlives a turn
+
+`/goal <objective>` sets a session objective and starts a loop: when a turn ends
+with the goal still active, the next turn starts automatically, until the agent
+calls the `goal_complete` tool or the cycle budget runs out.
+
+```
+/goal keep the tests green after every refactor
+```
+
+The objective is injected into the system prompt as a `# Current Goal` section,
+persisted in the session's `meta.json`, and shown in the status bar with the cycle
+it has reached (`goal 2/8: keep the tests green…`).
+
+The loop is bounded, and every bound is a deliberate choice:
+
+- **Cycles.** 8 by default, overridable with `PI_GOAL_MAX_CYCLES`. Hitting the
+  budget stops the loop and leaves the objective active, so `/goal resume`
+  continues it rather than making you retype it.
+- **`goal_complete`.** The agent ends the loop by calling this tool with the
+  cycle number the prompt names. A report that names another cycle is rejected,
+  so a turn that started before the goal was set cannot close it.
+- **Esc.** Stops the loop. The objective stays active — press `/goal resume` to
+  continue.
+- **A prompt you type.** Runs before the next automatic cycle, so what you say
+  about the work reaches the agent before it spends another turn on it.
+
+`/goal pause` stops the loop and keeps the objective; `/goal clear` drops it. A
+goal is per-session and survives `--continue`, though resuming never restarts the
+loop on its own.
 
 ### Installing a single skill
 

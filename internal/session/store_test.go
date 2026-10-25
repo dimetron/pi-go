@@ -2432,3 +2432,108 @@ func readMetaRaw(t *testing.T, path string) map[string]any {
 	}
 	return raw
 }
+
+// The goal is written whole, so its loop counters must survive the JSON
+// round-trip: a resumed session continues the same budget rather than granting
+// a fresh one.
+func TestGoal_RoundTrip(t *testing.T) {
+	svc := newTestService(t)
+	sid := createTestSession(t, svc)
+
+	goal := &Goal{
+		Objective:      "keep the tests green",
+		Status:         GoalStatusActive,
+		Cycles:         3,
+		MaxCycles:      8,
+		Turn:           3,
+		CreatedAt:      1_700_000_000,
+		UpdatedAt:      1_700_000_100,
+		CompletedAt:    1_700_000_200,
+		CompletionNote: "all packages pass",
+	}
+	if err := svc.UpdateGoal(sid, goal); err != nil {
+		t.Fatalf("UpdateGoal: %v", err)
+	}
+
+	got, err := svc.GetGoal(sid)
+	if err != nil {
+		t.Fatalf("GetGoal: %v", err)
+	}
+	if got == nil {
+		t.Fatal("GetGoal returned nil after UpdateGoal")
+	}
+	if *got != *goal {
+		t.Errorf("GetGoal = %+v, want %+v", got, goal)
+	}
+
+	// On-disk: meta.json carries it under "goal".
+	data, err := os.ReadFile(filepath.Join(svc.baseDir, sid, "meta.json"))
+	if err != nil {
+		t.Fatalf("reading meta.json: %v", err)
+	}
+	var raw struct {
+		Goal *Goal `json:"goal"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("decoding meta.json: %v", err)
+	}
+	if raw.Goal == nil || raw.Goal.Cycles != 3 || raw.Goal.Status != GoalStatusActive {
+		t.Errorf("meta.json goal = %+v, want the recorded goal", raw.Goal)
+	}
+
+	// Clearing writes absence, not a zero-value goal.
+	if err := svc.UpdateGoal(sid, nil); err != nil {
+		t.Fatalf("UpdateGoal(nil): %v", err)
+	}
+	if got, err := svc.GetGoal(sid); err != nil || got != nil {
+		t.Errorf("GetGoal after clear = %+v, %v; want nil, nil", got, err)
+	}
+}
+
+// The service must own the goal it stores. Handing it a live pointer let the TUI
+// mutate session metadata without the FileService locks, while AppendEvent
+// marshaled the same struct concurrently — a real race, reproduced under -race by
+// mutating the goal after UpdateGoal returns.
+func TestGoal_CopiesAtBothBoundaries(t *testing.T) {
+	svc := newTestService(t)
+	sid := createTestSession(t, svc)
+
+	live := &Goal{Objective: "original", Status: GoalStatusActive, Cycles: 1}
+	if err := svc.UpdateGoal(sid, live); err != nil {
+		t.Fatalf("UpdateGoal: %v", err)
+	}
+
+	// Mutating the caller's struct must not change what the service holds.
+	live.Objective = "mutated after update"
+	live.Cycles = 99
+
+	got, err := svc.GetGoal(sid)
+	if err != nil {
+		t.Fatalf("GetGoal: %v", err)
+	}
+	if got.Objective != "original" || got.Cycles != 1 {
+		t.Errorf("stored goal = %+v, want the values as they were at UpdateGoal time", got)
+	}
+
+	// And mutating what GetGoal returned must not change it either.
+	got.Objective = "mutated via GetGoal"
+	again, err := svc.GetGoal(sid)
+	if err != nil {
+		t.Fatalf("GetGoal: %v", err)
+	}
+	if again.Objective != "original" {
+		t.Errorf("stored goal = %q, want the caller's edit to GetGoal's result to be invisible", again.Objective)
+	}
+}
+
+// An unknown session is an error, not a silent nil: the caller has to know its
+// write went nowhere.
+func TestGoal_UnknownSession(t *testing.T) {
+	svc := newTestService(t)
+	if err := svc.UpdateGoal("nope", &Goal{Objective: "x"}); err == nil {
+		t.Error("UpdateGoal on an unknown session returned no error")
+	}
+	if _, err := svc.GetGoal("nope"); err == nil {
+		t.Error("GetGoal on an unknown session returned no error")
+	}
+}

@@ -13,6 +13,7 @@ import (
 	"github.com/mattn/go-runewidth"
 
 	"github.com/dimetron/pi-go/internal/extension"
+	pisession "github.com/dimetron/pi-go/internal/session"
 	"github.com/dimetron/pi-go/internal/subagent"
 )
 
@@ -299,6 +300,113 @@ func TestAgentStatusPriorityOrdering(t *testing.T) {
 	}
 	if agentStatusPriority("completed") != agentStatusPriority("done") {
 		t.Error("'completed' and 'done' should share a priority")
+	}
+}
+
+// The goal section is the only place the loop's cycle counter is visible while it
+// spends turns, so every state has to render something distinguishable.
+func TestSidebarGoalLines(t *testing.T) {
+	tests := []struct {
+		name    string
+		goal    *pisession.Goal
+		max     int
+		stopped bool
+		want    []string
+		wantNot []string
+	}{
+		{
+			name:    "no goal is hidden",
+			goal:    nil,
+			wantNot: []string{"Goal"},
+		},
+		{
+			name: "active mid-loop counts the cycle",
+			goal: &pisession.Goal{Objective: "keep the tests green", Status: pisession.GoalStatusActive, Cycles: 3},
+			max:  8,
+			want: []string{"Goal [cycle 3/8]", "keep the tests green"},
+		},
+		{
+			name:    "stopped is distinct from running",
+			goal:    &pisession.Goal{Objective: "ship it", Status: pisession.GoalStatusActive, Cycles: 2},
+			max:     8,
+			stopped: true,
+			want:    []string{"Goal [2/8 stopped]"},
+			wantNot: []string{"cycle"},
+		},
+		{
+			name: "paused",
+			goal: &pisession.Goal{Objective: "ship it", Status: pisession.GoalStatusPaused, Cycles: 2},
+			max:  8,
+			want: []string{"Goal [2/8 paused]"},
+		},
+		{
+			name: "complete reports the cycles spent",
+			goal: &pisession.Goal{Objective: "ship it", Status: pisession.GoalStatusComplete, Cycles: 4},
+			max:  8,
+			want: []string{"Goal [done in 4]"},
+		},
+		{
+			name: "a stopped goal is reported even if the status says complete",
+			goal: &pisession.Goal{Objective: "ship it", Status: pisession.GoalStatusComplete, Cycles: 4},
+			max:  8,
+			want: []string{"done"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			out := plain(sidebarGoalLines(
+				SidebarRenderInput{Goal: tc.goal, GoalMaxCycles: tc.max, GoalStopped: tc.stopped}, 27, testSidebarStyles()))
+			for _, want := range tc.want {
+				if !strings.Contains(out, want) {
+					t.Errorf("expected %q in:\n%s", want, out)
+				}
+			}
+			for _, not := range tc.wantNot {
+				if strings.Contains(out, not) {
+					t.Errorf("did not expect %q in:\n%s", not, out)
+				}
+			}
+		})
+	}
+}
+
+// A multi-line objective must not break the sidebar's fixed row budget.
+func TestSidebarGoalLinesCollapsesNewlines(t *testing.T) {
+	out := plain(sidebarGoalLines(SidebarRenderInput{
+		Goal:          &pisession.Goal{Objective: "line one\nline two", Status: pisession.GoalStatusActive, Cycles: 1},
+		GoalMaxCycles: 8,
+	}, 27, testSidebarStyles()))
+
+	if strings.Count(out, "\n") > 3 {
+		t.Errorf("objective newlines leaked into the sidebar:\n%s", out)
+	}
+	if !strings.Contains(out, "line one line two") {
+		t.Errorf("expected the objective on one line, got:\n%s", out)
+	}
+}
+
+// The section sits above MCP Tools, per the sidebar's section order.
+func TestSidebarGoalLinesBeforeMCPTools(t *testing.T) {
+	out := ansi.Strip(RenderSidebar(SidebarRenderInput{
+		Width:         SidebarWidth,
+		Height:        40,
+		Mode:          "chat",
+		Goal:          &pisession.Goal{Objective: "ship it", Status: pisession.GoalStatusActive, Cycles: 1},
+		GoalMaxCycles: 8,
+		MCPTools:      []extension.MCPToolEntry{{Server: "alpha", Tool: "one"}},
+	}))
+
+	goalAt := strings.Index(out, "Goal [cycle 1/8]")
+	mcpAt := strings.Index(out, "MCP Tools [1]")
+	if goalAt < 0 {
+		t.Fatalf("goal section missing:\n%s", out)
+	}
+	if mcpAt < 0 {
+		t.Fatalf("MCP section missing:\n%s", out)
+	}
+	if goalAt > mcpAt {
+		t.Errorf("goal section renders below MCP Tools")
 	}
 }
 

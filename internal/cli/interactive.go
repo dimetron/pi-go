@@ -44,6 +44,10 @@ type initResources struct {
 	stdLog     *logger.StdLog // detached before sessionLog closes
 	sessionID  string         // captured for resume hint on exit
 	bashSup    *tools.BashSupervisor
+	// goalTool is the shared goal_complete controller. Held here between the tool
+	// set being built and the InitResult handing it to the TUI, which is the only
+	// side that knows which cycle is running.
+	goalTool *tools.GoalController
 
 	// memSummarizer, with memSessionID and memProject, describes the
 	// end-of-session summary written during cleanup. All three are empty when
@@ -412,13 +416,15 @@ func deferredInit(
 			SystemNoticeCh:    noticeCh,
 			ContextBreakdown: buildContextBreakdown(
 				instructionParts, coreTools, mcpToolsets, ps.skills, ps.agentConfigs),
-			TokenTracker:   tokenTracker,
-			CompactMetrics: cbs.compactMetrics,
-			GitBranch:      ps.gitBranch,
-			DiffAdded:      ps.diffAdded,
-			DiffRemoved:    ps.diffRemoved,
-			MCPToolsets:    ps.mcpToolsets,
-			MCPServers:     buildMCPServerConfigs(cfg),
+			TokenTracker:    tokenTracker,
+			CompactMetrics:  cbs.compactMetrics,
+			GitBranch:       ps.gitBranch,
+			DiffAdded:       ps.diffAdded,
+			DiffRemoved:     ps.diffRemoved,
+			GoalTool:        res.goalTool,
+			BaseInstruction: instruction,
+			MCPToolsets:     ps.mcpToolsets,
+			MCPServers:      buildMCPServerConfigs(cfg),
 		},
 	}
 
@@ -448,7 +454,9 @@ func deferredInitCoreTools(sandboxRoot, worktreeDir string, res *initResources) 
 	bashSup := tools.NewBashSupervisor()
 	res.bashSup = bashSup
 
-	coreTools, err := tools.CoreTools(sandbox, coreToolOptions(bashSup)...)
+	goalOpt, goalTool := tools.WithGoal()
+	res.goalTool = goalTool
+	coreTools, err := tools.CoreTools(sandbox, append(coreToolOptions(bashSup), goalOpt)...)
 	if err != nil {
 		return nil, fmt.Errorf("creating core tools: %w", err)
 	}

@@ -16,6 +16,7 @@ import (
 
 	"github.com/dimetron/pi-go/internal/extension"
 	"github.com/dimetron/pi-go/internal/palace"
+	pisession "github.com/dimetron/pi-go/internal/session"
 	"github.com/dimetron/pi-go/internal/sop"
 	"github.com/dimetron/pi-go/internal/subagent"
 )
@@ -75,10 +76,17 @@ type SidebarRenderInput struct {
 	Orchestrator   *subagent.Orchestrator   // may be nil — for agents section
 	Skills         []extension.Skill        // skills section; nil = hidden
 	MCPTools       []extension.MCPToolEntry // MCP tools section; nil = hidden
-	A2AAgents      []A2AAgentEntry          // A2A agents section; nil = hidden
-	MemoryStatus   *palace.PalaceStatus     // memory palace status; nil = hidden
-	Artifacts      []ArtifactEntry          // artifacts section; nil/empty = hidden
-	Palette        Palette                  // resolved theme palette; zero = dark default
+	// Goal is the session's /goal objective, nil when none is set. The loop
+	// spends a billed agent turn per cycle, so how far into the budget it has
+	// got belongs on screen while it happens rather than in the transcript
+	// afterwards.
+	Goal          *pisession.Goal
+	GoalMaxCycles int                  // resolved loop budget, 0 when no goal
+	GoalStopped   bool                 // loop stopped without the goal's status changing (Esc, budget)
+	A2AAgents     []A2AAgentEntry      // A2A agents section; nil = hidden
+	MemoryStatus  *palace.PalaceStatus // memory palace status; nil = hidden
+	Artifacts     []ArtifactEntry      // artifacts section; nil/empty = hidden
+	Palette       Palette              // resolved theme palette; zero = dark default
 }
 
 // A2AAgentEntry is one row in the A2A Agents sidebar section.
@@ -285,6 +293,7 @@ func sidebarTailLines(in SidebarRenderInput, innerW int, st sidebarStyles) []str
 		sidebarAgentLines(in, innerW, st),
 		sidebarSkillLines(in, st),
 		sidebarMemoryLines(in, st),
+		sidebarGoalLines(in, innerW, st),
 		sidebarMCPLines(in, innerW, st),
 		sidebarA2ALines(in, innerW, st),
 		sidebarLoadingLines(in, st),
@@ -658,6 +667,52 @@ func sidebarMemoryLines(in SidebarRenderInput, st sidebarStyles) []string {
 			fmt.Sprintf("  ⬡ %d entities", in.MemoryStatus.KG.EntityCount)))
 	}
 	lines = append(lines, st.dim.Render(fmt.Sprintf("  ⬡ %d rooms", in.MemoryStatus.RoomCount)))
+	return append(lines, "")
+}
+
+// sidebarGoalLines renders the /goal section: the cycle the loop is spending
+// against its budget, the objective, and whether the loop is stopped.
+//
+// It is shown whether or not a turn is running, because an automatic loop that
+// keeps starting turns is indistinguishable from an agent stuck repeating itself
+// unless the cycle counter is on screen — and the first sign of the difference
+// would be the bill.
+//
+// The state word is not redundant with the goal's status. Esc and the cycle
+// budget both leave the goal Active so /goal resume can continue it, so the
+// status alone cannot tell a running loop from a stopped one; GoalStopped can.
+func sidebarGoalLines(in SidebarRenderInput, innerW int, st sidebarStyles) []string {
+	if in.Goal == nil {
+		return nil
+	}
+
+	var heading string
+	style := st.pink.Bold(true)
+	switch in.Goal.Status {
+	case pisession.GoalStatusActive:
+		heading = fmt.Sprintf("  Goal [cycle %d/%d]", in.Goal.Cycles, in.GoalMaxCycles)
+		if in.GoalStopped {
+			heading = fmt.Sprintf("  Goal [%d/%d stopped]", in.Goal.Cycles, in.GoalMaxCycles)
+			style = st.overlay.Bold(true)
+		}
+	case pisession.GoalStatusPaused:
+		heading = fmt.Sprintf("  Goal [%d/%d paused]", in.Goal.Cycles, in.GoalMaxCycles)
+		style = st.overlay.Bold(true)
+	case pisession.GoalStatusComplete:
+		heading = fmt.Sprintf("  Goal [done in %d]", in.Goal.Cycles)
+		style = st.green.Bold(true)
+	default:
+		// GoalStatus is a string, so a session written by a newer build can carry
+		// a state this one does not know. Showing the objective under a generic
+		// heading beats hiding work the user asked for.
+		heading = "  Goal"
+	}
+
+	lines := []string{style.Render(truncateLabel(heading, innerW))}
+	if in.Goal.Objective != "" {
+		lines = append(lines, st.dim.Render("  "+truncateLabel(
+			strings.Join(strings.Fields(in.Goal.Objective), " "), max(innerW-4, 1))))
+	}
 	return append(lines, "")
 }
 
