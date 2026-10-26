@@ -43,6 +43,9 @@
     "fxmacrodata": {
       "url": "https://mcp.fxmacrodata.com"
     },
+    "deed-page": {
+      "url": "https://deed.page/mcp"
+    },
     "docs-acp": {
       "url": "https://gitmcp.io/agentclientprotocol/agent-client-protocol"
     },
