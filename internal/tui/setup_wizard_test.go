@@ -358,3 +358,83 @@ func TestSetupWizard_StepIndicatorCountsRealSteps(t *testing.T) {
 		t.Errorf("no-key provider model step indicator = %q, want step 2/2", got)
 	}
 }
+
+// TestSetupWizard_PasteInsertsIntoKeyInput is the regression for the
+// pasting-into-setup bug: bracketed paste arrives as a tea.PasteMsg, never as
+// keystrokes, so a wizard that only forwards KeyPressMsg silently drops every
+// Cmd+V. The pasted key must land in the key input and survive to the result.
+func TestSetupWizard_PasteInsertsIntoKeyInput(t *testing.T) {
+	w := newTestWizard(t)
+
+	wizPress(t, w, tea.KeyEnter) // anthropic -> key step
+	wizPress(t, w, tea.KeyEnter) // reject an empty key
+	if w.errMsg == "" {
+		t.Fatal("expected a validation error for an empty key")
+	}
+	w.Update(tea.PasteMsg{Content: "sk-pasted-key"})
+	if w.errMsg != "" {
+		t.Errorf("validation error remains after paste: %q", w.errMsg)
+	}
+	if got := w.keyInput.Value(); got != "sk-pasted-key" {
+		t.Fatalf("keyInput = %q, want sk-pasted-key", got)
+	}
+
+	wizPress(t, w, tea.KeyEnter)
+	if w.step != setupStepModel {
+		t.Fatalf("after entering a pasted key, step = %v, want setupStepModel", w.step)
+	}
+
+	// Confirm the model step so Result() reflects a completed flow.
+	wizPress(t, w, tea.KeyEnter)
+	if !w.quitting {
+		t.Fatal("confirming the model should quit the program")
+	}
+	if got := w.Result().APIKey; got != "sk-pasted-key" {
+		t.Errorf("APIKey = %q, want sk-pasted-key", got)
+	}
+}
+
+// TestSetupWizard_PasteFiltersModel checks that a paste in the model step
+// narrows the candidate list exactly like a typed filter, and that confirming
+// then selects the highlighted candidate.
+func TestSetupWizard_PasteFiltersModel(t *testing.T) {
+	w := newTestWizard(t)
+
+	wizPress(t, w, tea.KeyEnter) // anthropic -> key step
+	wizPressText(t, w, "k")
+	wizPress(t, w, tea.KeyEnter) // -> model step
+
+	wizPress(t, w, tea.KeyDown)
+	wizPress(t, w, tea.KeyDown) // highlight the last candidate before filtering
+	w.Update(tea.PasteMsg{Content: "claude-opus"})
+	if w.candIdx != 0 {
+		t.Errorf("candidate index = %d, want 0 after filtering", w.candIdx)
+	}
+	if got := w.modelInput.Value(); got != "claude-opus" {
+		t.Fatalf("modelInput = %q, want claude-opus", got)
+	}
+
+	wizPress(t, w, tea.KeyEnter)
+	if !w.quitting {
+		t.Fatal("confirming a filtered model should quit the program")
+	}
+	if got := w.Result().Model; got != "claude-opus-5" {
+		t.Errorf("Model = %q, want claude-opus-5", got)
+	}
+}
+
+// TestSetupWizard_PasteIgnoredOnProviderStep pins that a paste on the provider
+// list (which owns no text input) is safely ignored rather than panicking.
+func TestSetupWizard_PasteIgnoredOnProviderStep(t *testing.T) {
+	w := newTestWizard(t)
+	w.Update(tea.PasteMsg{Content: "pasted-on-list"})
+	if w.step != setupStepProvider {
+		t.Fatalf("step = %v, want setupStepProvider", w.step)
+	}
+	if w.quitting || w.confirmed {
+		t.Fatal("a paste on the provider list must not quit or confirm the wizard")
+	}
+	if w.keyInput.Value() != "" || w.modelInput.Value() != "" {
+		t.Fatal("a paste on the provider list must not reach either text input")
+	}
+}
