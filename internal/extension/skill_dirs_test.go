@@ -95,8 +95,7 @@ func TestDefaultSkillDirsInUserHome(t *testing.T) {
 // PI_GO_HOME relocates pi-go's own home, and it must rank below ~/.pi-go/skills
 // so a skill the user installed with `pi skills add` still wins a name clash.
 func TestDefaultSkillDirsIncludesAgentsSkills(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := setTestHome(t)
 	t.Setenv("PI_GO_HOME", filepath.Join(home, "relocated"))
 
 	dirs := DefaultSkillDirsIn(t.TempDir())
