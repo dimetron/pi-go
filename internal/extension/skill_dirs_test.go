@@ -21,11 +21,11 @@ func TestDefaultSkillDirsIn(t *testing.T) {
 	root := t.TempDir()
 	piGoSkills := filepath.Join(root, ".pi-go", "skills")
 	claudeSkills := filepath.Join(root, ".claude", "skills")
-	if err := os.MkdirAll(piGoSkills, 0o755); err != nil {
-		t.Fatalf("create .pi-go skills dir: %v", err)
-	}
-	if err := os.MkdirAll(claudeSkills, 0o755); err != nil {
-		t.Fatalf("create .claude skills dir: %v", err)
+	agentsSkills := filepath.Join(root, ".agents", "skills")
+	for _, dir := range []string{piGoSkills, claudeSkills, agentsSkills} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("create %s: %v", dir, err)
+		}
 	}
 
 	dirs := DefaultSkillDirsIn(root)
@@ -34,9 +34,10 @@ func TestDefaultSkillDirsIn(t *testing.T) {
 	}
 	t.Logf("DefaultSkillDirsIn: %v", dirs)
 
-	// Verify it finds .claude/skills and .pi-go/skills.
+	// Verify it finds .claude/skills, .pi-go/skills and .agents/skills.
 	foundClaude := false
 	foundPigo := false
+	foundAgents := false
 	for _, d := range dirs {
 		if d == claudeSkills {
 			foundClaude = true
@@ -44,12 +45,18 @@ func TestDefaultSkillDirsIn(t *testing.T) {
 		if d == piGoSkills {
 			foundPigo = true
 		}
+		if d == agentsSkills {
+			foundAgents = true
+		}
 	}
 	if !foundClaude {
 		t.Error("did not find .claude/skills")
 	}
 	if !foundPigo {
 		t.Error("did not find .pi-go/skills")
+	}
+	if !foundAgents {
+		t.Error("did not find .agents/skills")
 	}
 }
 
@@ -65,15 +72,53 @@ func TestDefaultSkillDirsInUserHome(t *testing.T) {
 	}
 
 	userDir := filepath.Join(userHome, ".pi-go", "skills")
+	agentsDir := filepath.Join(userHome, ".agents", "skills")
 	found := false
+	foundAgents := false
 	for _, d := range dirs {
 		if d == userDir {
 			found = true
-			break
+		}
+		if d == agentsDir {
+			foundAgents = true
 		}
 	}
 	if !found {
 		t.Errorf("user-level skill dir %q not included", userDir)
+	}
+	if !foundAgents {
+		t.Errorf("~/.agents/skills dir %q not included", agentsDir)
+	}
+}
+
+// ~/.agents/skills is the cross-agent layout. It must be searched even when
+// PI_GO_HOME relocates pi-go's own home, and it must rank below ~/.pi-go/skills
+// so a skill the user installed with `pi skills add` still wins a name clash.
+func TestDefaultSkillDirsIncludesAgentsSkills(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PI_GO_HOME", filepath.Join(home, "relocated"))
+
+	dirs := DefaultSkillDirsIn(t.TempDir())
+	agentsDir := filepath.Join(home, ".agents", "skills")
+
+	agentsIdx, pigoIdx := -1, -1
+	for i, d := range dirs {
+		switch d {
+		case agentsDir:
+			agentsIdx = i
+		case filepath.Join(home, "relocated", "skills"):
+			pigoIdx = i
+		}
+	}
+	if agentsIdx < 0 {
+		t.Fatalf("~/.agents/skills not included in %v", dirs)
+	}
+	if pigoIdx < 0 {
+		t.Fatalf("PI_GO_HOME skills dir not included in %v", dirs)
+	}
+	if agentsIdx > pigoIdx {
+		t.Errorf("~/.agents/skills (idx %d) must precede PI_GO_HOME/skills (idx %d): later dirs win", agentsIdx, pigoIdx)
 	}
 }
 
