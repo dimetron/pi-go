@@ -126,6 +126,61 @@ go tool trace http://localhost:6060/debug/pprof/trace
 - The pprof server runs in a background goroutine alongside the main app
 - Default port is `6060`; change with `--pprof-port`
 
+## Contributing MCP Servers to the Example Config
+
+The curated example MCP configuration lives at `.pi-go/mcp-example.json` (the
+`.pi-go/` directory is gitignored, so the file is distributed as a reference and
+copied into a user's `.pi-go/mcp.json`). It is a **vetted list, not a directory
+of everything that exists**.
+
+To keep it trustworthy and to avoid pointing users at abandoned or low-quality
+servers, additions to the example config are limited to **well-known MCP servers
+that meet a minimum bar for repository stars and credibility**. A submission
+that does not meet the bar stays out of the example config — users can still add
+the server to their own `.pi-go/mcp.json`.
+
+### Minimum requirements
+
+| Requirement | Bar |
+|---|---|
+| Repository | Public source for the server (the server's own repo, or the vendor's official repo for a hosted endpoint) |
+| Stars | **≥ 100 GitHub stars** on the canonical repository |
+| Credibility | Recognizable maintainer, vendor, or active project — not a personal throwaway, a fork with no activity, or a name-squat on someone else's product |
+| Activity | Commits or releases within the last **12 months**; issues triaged rather than ignored |
+| Safety | No obfuscated binaries, no post-install scripts that fetch and execute remote code, no requests for credentials beyond what the server actually needs |
+| Usability | Installable from a documented, public method (`bunx`/`npx`/`uvx`, a release binary, or a documented remote URL) |
+
+Stars are a floor, not a qualification on their own: a 100-star repo that has been
+dormant for three years fails the activity and credibility requirements. Where the
+canonical distribution is a hosted endpoint rather than a repository (for example
+a vendor's own search MCP), judge credibility by the vendor and the endpoint's
+documentation, and note the vendor in the PR description.
+
+### What a submission must include
+
+1. **One entry per PR**, added to `.pi-go/mcp-example.json` in the existing shape
+   (`command`/`args` for local servers, `url` for remote ones).
+2. **Evidence in the PR description**: the repository URL, current star count,
+   date of the last release or commit, and the maintainer's identity.
+3. **A stated use case**: what the server gives pi-go users that the existing
+   entries do not.
+4. **Secrets as environment references** (`${MY_API_KEY}`), never literal keys.
+   An entry that hard-codes a credential is rejected outright.
+5. **No disabled or duplicate entries** — if a server replaces an existing entry,
+   propose the removal in the same PR and say why.
+
+### What gets rejected
+
+- New, unproven servers submitted for promotion or discoverability.
+- Entries that only work with a paid plan, with no free tier or trial for testing.
+- Servers that proxy another provider's API in violation of that provider's terms.
+- Anything that requires disabling the sandbox or running with elevated privileges.
+
+Maintainers apply this bar at their discretion; meeting every number above does
+not guarantee inclusion, and a server just under the star threshold with strong
+credibility (an established vendor or a recognized OSS maintainer) may still be
+accepted with a note in the PR.
+
 ## Pull Request Process
 
 1. **Self-Review**: Read through your changes. Ensure there are no debug prints (`fmt.Println`) or commented-out code.
