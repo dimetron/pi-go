@@ -142,12 +142,13 @@ Rebuild and reinstall the pi binary from source, then restart.
 ### Discovery Order (lowest → highest priority)
 
 1. **Bundled** — compiled into the `pi` binary (`internal/extension/bundled_skills/`)
-2. **User** — `~/.pi-go/skills/<name>/SKILL.md`
-3. **Project** — `.pi-go/skills/<name>/SKILL.md`
+2. **Cross-agent user** — `~/.agents/skills/<name>/SKILL.md`
+3. **User** — `~/.pi-go/skills/<name>/SKILL.md`
+4. **Project** — `.pi-go/skills/<name>/SKILL.md`
 
 Project skills override user skills of the same name. User skills override bundled skills.
 
-**Pi-go also reads `.claude/skills/` and `.cursor/skills/`** when walking up from the working directory — existing Claude Code skills work in pi-go without copying.
+**Pi-go also reads `~/.agents/skills/`, `.claude/skills/`, `.cursor/skills/` and `.agents/skills/`** — the project ones when walking up from the working directory — so skills already installed for another agent work in pi-go without copying.
 
 ### Claude Code Skill Format Comparison
 
