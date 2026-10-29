@@ -97,6 +97,7 @@ func TestDefaultSkillDirsInUserHome(t *testing.T) {
 func TestDefaultSkillDirsIncludesAgentsSkills(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir reads this on Windows, not HOME
 	t.Setenv("PI_GO_HOME", filepath.Join(home, "relocated"))
 
 	dirs := DefaultSkillDirsIn(t.TempDir())
