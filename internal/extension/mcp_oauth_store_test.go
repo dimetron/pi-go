@@ -16,13 +16,26 @@ import (
 )
 
 // setTestHome points os.UserHomeDir at a fresh temp directory for the test.
-// Both HOME (Unix) and USERPROFILE (Windows) are set so the store never
-// touches the real user profile on any platform.
+//
+// It sets every variable os.UserHomeDir consults, because which one wins is
+// platform-specific: HOME on unix, USERPROFILE on Windows, with HOMEDRIVE +
+// HOMEPATH as Windows' fallback when USERPROFILE is unset. Setting HOME alone
+// looks right on macOS and Linux and silently does nothing on the Windows job.
+//
+// It then asserts the function actually returns the directory. A platform that
+// consults something else fails here with "cannot control it on this platform"
+// rather than in some later assertion about a path.
 func setTestHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
+	t.Setenv("HOMEDRIVE", "")
+	t.Setenv("HOMEPATH", "")
+	if got, err := os.UserHomeDir(); err != nil || got != home {
+		t.Fatalf("os.UserHomeDir() = %q, %v; want %q — the test cannot control it on this platform",
+			got, err, home)
+	}
 	return home
 }
 

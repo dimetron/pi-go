@@ -1,6 +1,6 @@
 {
   "provider": "mistral",
-  "fetched_at": "2026-10-17T00:00:00Z",
+  "fetched_at": "2026-10-29T00:00:00Z",
   "models": [
     {
       "id": "codestral-2508",
@@ -10,7 +10,8 @@
         "completion_chat",
         "completion_fim",
         "function_calling"
-      ]
+      ],
+      "release_date": "2025-07-30"
     },
     {
       "id": "codestral-latest",
@@ -24,13 +25,24 @@
       "release_date": "2024-05-29"
     },
     {
+      "id": "deepseek-v4-1-flash-1017",
+      "owned_by": "mistralai",
+      "context_window": 1048576,
+      "capabilities": [
+        "completion_chat",
+        "function_calling",
+        "vision"
+      ]
+    },
+    {
       "id": "glm-5-2",
       "owned_by": "mistralai",
       "context_window": 1048576,
       "capabilities": [
         "completion_chat",
         "function_calling"
-      ]
+      ],
+      "release_date": "2026-06-13"
     },
     {
       "id": "labs-leanstral-1-5",
@@ -50,7 +62,8 @@
         "completion_chat",
         "function_calling",
         "vision"
-      ]
+      ],
+      "release_date": "2026-06-30"
     },
     {
       "id": "magistral-medium-latest",
@@ -82,7 +95,8 @@
         "function_calling",
         "fine_tuning",
         "vision"
-      ]
+      ],
+      "release_date": "2025-12-02"
     },
     {
       "id": "ministral-14b-latest",
@@ -104,7 +118,8 @@
         "function_calling",
         "fine_tuning",
         "vision"
-      ]
+      ],
+      "release_date": "2025-12-02"
     },
     {
       "id": "ministral-3b-latest",
@@ -127,7 +142,8 @@
         "function_calling",
         "fine_tuning",
         "vision"
-      ]
+      ],
+      "release_date": "2025-12-02"
     },
     {
       "id": "ministral-8b-latest",
@@ -181,7 +197,8 @@
         "completion_chat",
         "function_calling",
         "vision"
-      ]
+      ],
+      "release_date": "2026-10-06"
     },
     {
       "id": "mistral-large-4-0",
@@ -191,7 +208,8 @@
         "completion_chat",
         "function_calling",
         "vision"
-      ]
+      ],
+      "release_date": "2026-10-06"
     },
     {
       "id": "mistral-large-latest",
@@ -326,7 +344,8 @@
       "capabilities": [
         "completion_chat",
         "function_calling"
-      ]
+      ],
+      "release_date": "2025-07-15"
     },
     {
       "id": "voxtral-small-latest",
@@ -364,6 +383,17 @@
       "capabilities": [
         "completion_chat",
         "function_calling"
+      ],
+      "release_date": "2026-08-14"
+    },
+    {
+      "id": "zai-glm-5-3-flash",
+      "owned_by": "mistralai",
+      "context_window": 1048576,
+      "capabilities": [
+        "completion_chat",
+        "function_calling",
+        "vision"
       ],
       "release_date": "2026-08-14"
     },

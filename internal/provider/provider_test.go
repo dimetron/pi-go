@@ -225,6 +225,55 @@ func TestStripKnownProviderPrefixes(t *testing.T) {
 	}
 }
 
+// TestBareModelID pins the model id a capability check must match on. A gateway
+// route prefix is arbitrary — a live gateway exposed azure-llm/gpt-6-luna — so
+// the last path segment is the only reliable way to name the model. Matching on
+// StripKnownProviderPrefixes left "azure-llm/gpt-6-luna" intact, no gpt-6 rule
+// fired, and the request went to /v1/chat/completions with max_completion_tokens
+// for a model that only serves /v1/responses (observed: 404 Not Found).
+func TestBareModelID(t *testing.T) {
+	tests := []struct{ input, want string }{
+		{"gpt-6-luna", "gpt-6-luna"},
+		{"openai/gpt-6-luna", "gpt-6-luna"},
+		{"agentgateway/openai/gpt-6-luna", "gpt-6-luna"},
+		{"agentgateway/azure-llm/gpt-6-luna", "gpt-6-luna"},
+		{"azure-llm/gpt-5.6-luna", "gpt-5.6-luna"},
+		{"some-private-proxy/gpt-6-astra", "gpt-6-astra"},
+		{"agentgateway/ollama-cloud/deepseek-v4.1-flash:cloud", "deepseek-v4.1-flash:cloud"},
+		{"  GPT-6-LUNA  ", "gpt-6-luna"},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			if got := BareModelID(tt.input); got != tt.want {
+				t.Errorf("BareModelID(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestContextWindowResolvesThroughUnknownRoutePrefix covers the second half of
+// the same bug: a context window that resolves to 0 disables auto-compaction
+// and prints "context window unknown". Before the BareModelID change, a route
+// named azure-llm/gpt-6-luna returned 0 while the identical model under a known
+// prefix returned 1050000.
+func TestContextWindowResolvesThroughUnknownRoutePrefix(t *testing.T) {
+	known := ContextWindowSizeFor("agentgateway", "agentgateway/openai/gpt-6-luna")
+	if known == 0 {
+		t.Fatal("baseline: gpt-6-luna resolves to no context window")
+	}
+	for _, model := range []string{
+		"agentgateway/azure-llm/gpt-6-luna",
+		"azure-llm/gpt-6-luna",
+		"azure-llm/GPT-6-LUNA",
+		"some-private-proxy/gpt-6-luna",
+	} {
+		if got := ContextWindowSizeFor("agentgateway", model); got != known {
+			t.Errorf("ContextWindowSizeFor(agentgateway, %q) = %d, want %d (same model as the known-prefix form)", model, got, known)
+		}
+	}
+}
+
 func TestResolveMistralPrefixStripped(t *testing.T) {
 	tests := []struct {
 		model     string

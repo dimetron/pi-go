@@ -43,7 +43,7 @@ var oaiReasoningModels = []string{
 // reasoning series (gpt-5.1 … gpt-5.6-luna, gpt-6-astra …), including the
 // codex variants.
 func oaiModelReasons(modelName string) bool {
-	lower := strings.ToLower(StripKnownProviderPrefixes(strings.TrimSpace(modelName)))
+	lower := BareModelID(modelName)
 	for _, prefix := range oaiReasoningModels {
 		if strings.HasPrefix(lower, prefix) {
 			return true
@@ -121,7 +121,7 @@ func oaiReasoningEffortFor(modelName, thinkingLevel string) (shared.ReasoningEff
 // above "xhigh". Measured: gpt-5.4 and gpt-5.5 accept "xhigh" but reject
 // "max", so treating the two as one tier would 400 those models.
 func supportsMax(modelName string) bool {
-	lower := strings.ToLower(StripKnownProviderPrefixes(strings.TrimSpace(modelName)))
+	lower := BareModelID(modelName)
 	return strings.HasPrefix(lower, "gpt-5.6") || strings.HasPrefix(lower, "gpt-6")
 }
 
@@ -132,7 +132,7 @@ func supportsMax(modelName string) bool {
 // conflating the two is what would turn an auxiliary caller's deliberate
 // no-reasoning request into billed reasoning tokens.
 func oaiSupportsReasoningOff(modelName string) bool {
-	lower := strings.ToLower(StripKnownProviderPrefixes(strings.TrimSpace(modelName)))
+	lower := BareModelID(modelName)
 	// gpt-5.1 and later accept "none"; bare "gpt-5" and gpt-5.0 do not, and
 	// the family prefix alone cannot tell them apart.
 	if strings.HasPrefix(lower, "gpt-6") {
@@ -154,7 +154,7 @@ func oaiSupportsReasoningOff(modelName string) bool {
 // reject both, gpt-5.4/5.5 accept "xhigh" but not "max", and gpt-5.6/gpt-6
 // accept both.
 func oaiSupportsTopEffort(modelName string) bool {
-	lower := strings.ToLower(StripKnownProviderPrefixes(strings.TrimSpace(modelName)))
+	lower := BareModelID(modelName)
 	return strings.HasPrefix(lower, "gpt-5.4") ||
 		strings.HasPrefix(lower, "gpt-5.5") ||
 		strings.HasPrefix(lower, "gpt-5.6") ||
@@ -178,7 +178,7 @@ func oaiThinkingLevelForModel(modelName, thinkingLevel string) string {
 	if strings.TrimSpace(thinkingLevel) != "" {
 		return thinkingLevel
 	}
-	if strings.HasPrefix(strings.ToLower(StripKnownProviderPrefixes(modelName)), "gpt-5.6-luna") {
+	if strings.HasPrefix(BareModelID(modelName), "gpt-5.6-luna") {
 		return "high"
 	}
 	return thinkingLevel

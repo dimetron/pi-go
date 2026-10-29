@@ -1,6 +1,6 @@
 {
   "provider": "openai",
-  "fetched_at": "2026-10-17T00:00:00Z",
+  "fetched_at": "2026-10-29T00:00:00Z",
   "models": [
     {
       "id": "babbage-002",
@@ -412,6 +412,10 @@
       "id": "gpt-6.1-sol",
       "owned_by": "system",
       "release_date": "2026-09-29"
+    },
+    {
+      "id": "gpt-6.1-terra",
+      "owned_by": "system"
     },
     {
       "id": "gpt-audio",

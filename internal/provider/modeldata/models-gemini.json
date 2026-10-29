@@ -1,6 +1,6 @@
 {
   "provider": "gemini",
-  "fetched_at": "2026-10-17T00:00:00Z",
+  "fetched_at": "2026-10-29T00:00:00Z",
   "models": [
     {
       "id": "antigravity-preview-05-2026",
@@ -30,7 +30,7 @@
     },
     {
       "id": "deep-research-pro-preview-12-2025",
-      "owned_by": "Deep Research Pro Preview (Dec-12-2025)"
+      "owned_by": "Deep Research Pro Preview (Dec-12-2025) [Rerouted]"
     },
     {
       "id": "gemini-2.5-computer-use-preview-10-2025",
@@ -148,7 +148,8 @@
     },
     {
       "id": "gemini-4-argon",
-      "owned_by": "Gemini 4 Argon"
+      "owned_by": "Gemini 4 Argon",
+      "release_date": "2026-10-13"
     },
     {
       "id": "gemini-embedding-001",

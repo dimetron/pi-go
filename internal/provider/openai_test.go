@@ -1368,6 +1368,18 @@ func TestModelNeedsResponses(t *testing.T) {
 		{"anthropic/gpt-5.6-luna", true},
 		{"gemini/gpt-5.6-luna", true},
 		{"agentgateway/openai/gpt-5.6-luna", true},
+		// A gateway route prefix pi-go does not know. The route can be named
+		// anything, so the endpoint decision must be made on the model id alone.
+		// Measured against a live gateway: azure-llm/gpt-6-luna sent
+		// max_completion_tokens to /v1/chat/completions and got 404 Not Found,
+		// because "azure-llm/" survived prefix stripping and no "gpt-6" matcher
+		// fired.
+		{"agentgateway/azure-llm/gpt-6-luna", true},
+		{"agentgateway/azure-llm/gpt-5.6-luna", true},
+		{"azure-llm/gpt-6-luna", true},
+		{"azure-llm/gpt-5.6-sol", true},
+		{"some-private-proxy/gpt-6-astra", true},
+		{"agentgateway/azure-llm/gpt-5.5", false},
 		{"openai/gpt-5.5", false},
 		// Case insensitive
 		{"GPT-5-CODEX", true},
