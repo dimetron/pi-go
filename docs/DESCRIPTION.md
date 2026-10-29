@@ -251,7 +251,7 @@ Agent Types:
 2. **Skills** (`<name>/SKILL.md` subdirectories):
    - Markdown instruction files with YAML frontmatter (`name`, `description`, `tools`)
    - Loaded from global (`~/.pi-go/skills/<name>/SKILL.md`) and project (`.pi-go/skills/<name>/SKILL.md`) directories
-   - Also reads `.claude/skills/` and `.cursor/skills/` when present
+   - Also reads `~/.agents/skills/`, `.claude/skills/`, `.cursor/skills/` and `.agents/skills/` when present
    - Project skills override user skills; user skills override bundled skills
    - **Audit system** scans for hidden Unicode threats (BiDi attacks, supply-chain)
 

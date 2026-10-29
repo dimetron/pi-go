@@ -451,9 +451,9 @@ func SkillBodySize(skills []Skill, name string) (int, bool) {
 }
 
 // DefaultSkillDirs returns the default skill directories to search.
-// It returns user-level (~/.pi-go/skills) plus project-level directories
-// (.pi-go/skills, .claude/skills, .cursor/skills) found by walking up
-// from the current working directory.
+// It returns user-level (~/.pi-go/skills, ~/.agents/skills) plus project-level
+// directories (.pi-go/skills, .claude/skills, .cursor/skills, .agents/skills)
+// found by walking up from the current working directory.
 func DefaultSkillDirs() []string {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -464,15 +464,16 @@ func DefaultSkillDirs() []string {
 
 // DefaultSkillDirsIn returns skill directories relative to the given root.
 // Installed plugins come first (lowest priority), then the user-level skill
-// directory (~/.pi-go/skills), then the project-level directories
-// (.pi-go/skills, .claude/skills, .cursor/skills) found by walking up from root.
+// directories (~/.pi-go/skills, ~/.agents/skills), then the project-level
+// directories (.pi-go/skills, .claude/skills, .cursor/skills, .agents/skills)
+// found by walking up from root.
 //
 // Order is precedence: a later directory overrides an earlier one, so a plugin
 // can never silently replace a skill the user wrote or customized under the
 // same name.
 func DefaultSkillDirsIn(root string) []string {
-	dirs := make([]string, 0, 8)
-	seen := make(map[string]struct{}, 8)
+	dirs := make([]string, 0, 10)
+	seen := make(map[string]struct{}, 10)
 	add := func(dir string) {
 		if dir == "" {
 			return
@@ -503,7 +504,14 @@ func DefaultSkillDirsIn(root string) []string {
 		}
 	}
 
-	// User-level skill directory.
+	// User-level skill directories, lowest priority first. ~/.agents/skills is
+	// the cross-agent layout other harnesses read, so pi-go sees the skills
+	// already installed there without a copy. It is added before ~/.pi-go/skills
+	// so a skill the user installed with `pi skills add` still wins a name clash,
+	// and it is keyed off the real home even when PI_GO_HOME relocates pi-go's.
+	if homeDir, err := os.UserHomeDir(); err == nil {
+		add(filepath.Join(homeDir, ".agents", "skills"))
+	}
 	if piHomeDir != "" {
 		add(filepath.Join(piHomeDir, "skills"))
 	}
@@ -513,6 +521,7 @@ func DefaultSkillDirsIn(root string) []string {
 		filepath.Join(".pi-go", "skills"),
 		filepath.Join(".claude", "skills"),
 		filepath.Join(".cursor", "skills"),
+		filepath.Join(".agents", "skills"),
 	} {
 		add(findNearestDir(root, rel))
 	}
