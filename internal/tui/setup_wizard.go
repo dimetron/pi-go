@@ -267,6 +267,35 @@ func (w *SetupWizard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return w, nil
 	case tea.KeyPressMsg:
 		return w.handleKey(m)
+	case tea.PasteMsg:
+		return w.handlePaste(m)
+	}
+	return w, nil
+}
+
+// handlePaste inserts pasted text into the text input of the current step.
+// Bracketed paste (Cmd+V in most terminal emulators) arrives as a PasteMsg,
+// never as keystrokes, so a wizard that only forwards KeyPressMsg would drop
+// every paste — visibly "nothing happens" when pasting an API key or a model
+// filter. The provider list owns no text input, so a paste there has nowhere
+// to go and is ignored.
+func (w *SetupWizard) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
+	switch w.step {
+	case setupStepKey:
+		w.errMsg = ""
+		var cmd tea.Cmd
+		w.keyInput, cmd = w.keyInput.Update(msg)
+		return w, cmd
+	case setupStepModel:
+		w.errMsg = ""
+		var cmd tea.Cmd
+		w.modelInput, cmd = w.modelInput.Update(msg)
+		// Mirror handleModelKey: a pasted filter can narrow the list under
+		// the highlight, so re-clamp the selection like typed input does.
+		if list := w.filtered(); len(list) > 0 && w.candIdx >= len(list) {
+			w.candIdx = len(list) - 1
+		}
+		return w, cmd
 	}
 	return w, nil
 }
