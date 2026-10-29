@@ -39,7 +39,7 @@ const agentGatewayPlaceholderKey = "agentgateway-injects-the-real-key"
 // pi-go's cap (defaultOaiMaxOutputTokens = 64000) reach the model instead. The
 // gateway's other routes (anthropic, openai, gemini, …) speak the modern
 // max_completion_tokens field, so they must not be downgraded to the legacy
-// one.
+// one — see routesToOllama for why that is decided by the name prefix.
 func NewAgentGateway(ctx context.Context, modelName, apiKey, baseURL string, opts *LLMOptions) (model.LLM, error) {
 	if baseURL == "" {
 		baseURL = agentgatewayDefaultBaseURL
@@ -145,30 +145,24 @@ func GatewayRoutesToGemini(modelName string) bool {
 }
 
 // routesToOllama reports whether an agentgateway model name resolves to one of
-// the gateway's Ollama routes. The gateway's config.yaml routes the ollama,
-// ollama1/2/3 and ollama-cloud prefixes to Ollama backends, and the virtual
-// models that fail over across them (ollama-deepseek, ollama-gemma4, …) also
-// land on Ollama. Everything else — anthropic/, openai/, gemini/, pi-default,
-// and the bare vendor model names — speaks the modern max_completion_tokens
-// field and must not be downgraded to the legacy max_tokens.
+// the gateway's Ollama routes.
+//
+// The rule is the `ollama` prefix, and it is deliberately one rule rather than a
+// list. The gateway's config routes ollama, ollama1/2/3, ollama-cloud and the
+// virtual models that fail over across them (ollama-deepseek, ollama-glm53, …)
+// under that shared prefix, so a new Ollama route is covered the moment it is
+// named. Measured against a running gateway's /v1/models: every id with prefix
+// `ollama` is owner `ollama` or a virtual model over Ollama, and no id owned by
+// `ollama` lacks the prefix.
+//
+// The virtual-model exemption matters. pi-fast used to be Ollama-first, so it
+// was listed here by name; the gateway now routes it to openai/gpt-5.6-luna and
+// gemini/gemini-3.8-flash, and the name kept it on max_tokens anyway — a route
+// that speaks the modern field silently downgraded to the deprecated one
+// because a name no longer described where it went. That is the failure this
+// rule has to be able to express, so it does not carry a name list. Everything
+// else — anthropic/, openai/, gemini/, pi-default, pi-fast — speaks
+// max_completion_tokens and must not be downgraded.
 func routesToOllama(modelName string) bool {
-	lower := strings.ToLower(strings.TrimSpace(modelName))
-	for _, prefix := range []string{
-		"ollama/", "ollama1/", "ollama2/", "ollama3/", "ollama-cloud/",
-	} {
-		if strings.HasPrefix(lower, prefix) {
-			return true
-		}
-	}
-	// Virtual models that route to Ollama backends. pi-fast's primary failover
-	// target is ollama1/deepseek-v4-flash:0731-cloud, so it is Ollama-first.
-	for _, name := range []string{
-		"ollama-deepseek", "ollama-deepseek-balanced", "ollama-gemma4",
-		"ollama-glm-flash", "ollama-minimax", "pi-fast",
-	} {
-		if lower == name {
-			return true
-		}
-	}
-	return false
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(modelName)), "ollama")
 }

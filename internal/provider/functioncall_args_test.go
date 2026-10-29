@@ -227,6 +227,135 @@ func TestAgentGatewaySendsLegacyMaxTokens(t *testing.T) {
 	}
 }
 
+// TestRoutesToOllama pins the split between the gateway's Ollama routes, which
+// need the legacy max_tokens field, and every other route, which speaks
+// max_completion_tokens.
+//
+// The cases are real model ids read from a running gateway's /v1/models, not
+// invented ones. pi-fast is the regression: it used to be Ollama-first and was
+// listed by name, so when the gateway re-routed it to openai/gpt-5.6-luna the
+// name alone kept it on max_tokens. A name list cannot describe where a route
+// goes; the `ollama` prefix can, because the gateway names the routes it sends
+// to Ollama with it.
+func TestRoutesToOllama(t *testing.T) {
+	tests := []struct {
+		model string
+		want  bool
+	}{
+		// Ollama backends (owner: ollama).
+		{"ollama-cloud/deepseek-v4.1-flash:cloud", true},
+		{"ollama/glm-5.3-flash:cloud", true},
+		{"ollama1/deepseek-v4-flash:0731-cloud", true},
+		{"OLLAMA-cloud/Kimi-K2.6", true}, // case-insensitive
+		{"  ollama-cloud/glm-5.3:cloud  ", true},
+
+		// Virtual models over Ollama (owner: virtual, prefix ollama).
+		{"ollama-deepseek", true},
+		{"ollama-deepseek-balanced", true},
+		{"ollama-gemma4", true},
+		{"ollama-glm-flash", true},
+		{"ollama-glm53", true},
+		{"ollama-minimax", true},
+		{"ollama-spark", true},
+		{"ollama-dsf4", true},
+
+		// Modern routes. pi-fast is the regression: the gateway routes it to
+		// openai/gpt-5.6-luna and gemini/gemini-3.8-flash, neither of which
+		// understands the legacy field.
+		{"pi-fast", false},
+		{"pi-default", false},
+		{"openai/gpt-5.6-luna", false},
+		{"openai/gpt-6-luna", false},
+		{"gpt-5.6-luna", false},
+		{"gpt-6-luna", false},
+		{"anthropic/claude-opus-5", false},
+		{"gemini/gemini-3.8-flash", false},
+		{"openrouter/openai/gpt-5.6-luna", false},
+		{"opencode/gpt-5.6-luna", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		if got := routesToOllama(tt.model); got != tt.want {
+			t.Errorf("routesToOllama(%q) = %v, want %v", tt.model, got, tt.want)
+		}
+	}
+}
+
+// TestAgentGatewayRouteFieldOnTheWire drives the whole constructor per route
+// and asserts on the request body, because a correct predicate that is not
+// wired into NewAgentGateway proves nothing. pi-fast is the case that failed:
+// it took the legacy branch while resolving to OpenAI and Gemini.
+func TestAgentGatewayRouteFieldOnTheWire(t *testing.T) {
+	tests := []struct {
+		model      string
+		wantLegacy bool
+		wantModern bool
+		wantOutput bool
+	}{
+		// Responses-only models: the ceiling rides as max_output_tokens, which
+		// is that API's name for it and not the legacy field.
+		{"openai/gpt-6-luna", false, false, true},
+		{"openai/gpt-5.6-luna", false, false, true},
+		// Chat Completions on a modern backend.
+		{"pi-fast", false, true, false},
+		{"pi-default", false, true, false},
+		{"anthropic/claude-opus-5", false, true, false},
+		{"pi-fast-something-else", false, true, false},
+		// Ollama: the legacy field it actually understands.
+		{"ollama-cloud/deepseek-v4.1-flash:cloud", true, false, false},
+		{"ollama-deepseek", true, false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			var body []byte
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ = io.ReadAll(r.Body)
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"id": "c1", "object": "chat.completion", "model": "m",
+					"choices": []map[string]any{{
+						"index":         0,
+						"message":       map[string]any{"role": "assistant", "content": "ok"},
+						"finish_reason": "stop",
+					}},
+					"usage": map[string]any{"prompt_tokens": 1, "completion_tokens": 1},
+				})
+			}))
+			defer srv.Close()
+
+			llm, err := NewAgentGateway(context.Background(), tt.model, "", srv.URL, nil)
+			if err != nil {
+				t.Fatalf("NewAgentGateway() error: %v", err)
+			}
+			req := &model.LLMRequest{Contents: []*genai.Content{
+				{Role: "user", Parts: []*genai.Part{{Text: "hi"}}},
+			}}
+			for _, err := range llm.GenerateContent(context.Background(), req, false) {
+				if err != nil {
+					t.Fatalf("GenerateContent() error: %v", err)
+				}
+			}
+
+			var sent map[string]any
+			if err := json.Unmarshal(body, &sent); err != nil {
+				t.Fatalf("decoding request: %v", err)
+			}
+			_, legacy := sent["max_tokens"]
+			_, modern := sent["max_completion_tokens"]
+			_, output := sent["max_output_tokens"]
+			if legacy != tt.wantLegacy {
+				t.Errorf("max_tokens present = %v, want %v (body: %s)", legacy, tt.wantLegacy, body)
+			}
+			if modern != tt.wantModern {
+				t.Errorf("max_completion_tokens present = %v, want %v (body: %s)", modern, tt.wantModern, body)
+			}
+			if output != tt.wantOutput {
+				t.Errorf("max_output_tokens present = %v, want %v (body: %s)", output, tt.wantOutput, body)
+			}
+		})
+	}
+}
+
 // TestAgentGatewayNonOllamaRouteSendsModernMaxTokens pins that legacy mode is
 // scoped to the gateway's Ollama routes, not forced provider-wide. A route that
 // resolves to a non-Ollama backend (here anthropic/) must send the modern
