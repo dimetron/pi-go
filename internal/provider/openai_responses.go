@@ -24,7 +24,7 @@ func modelNeedsResponses(modelName string) bool {
 	// "agentgateway/openai/gpt-5.6-luna") so the bare model ID is matched. The
 	// gateway forwards the bare ID upstream, so the endpoint decision must be
 	// made on it.
-	lower := strings.ToLower(StripKnownProviderPrefixes(modelName))
+	lower := BareModelID(modelName)
 	// Responses-only model families.
 	responsesOnly := []string{
 		"gpt-5-codex", "gpt-5.1-codex", "gpt-5.1-codex-mini", "gpt-5.1-codex-max",

@@ -1,4 +1,4 @@
-.PHONY: vulncheck build install test test-unit test-integration test-e2e test-all test-coverage test-ollama check-cve scan sbom lint vet e2e clean sandbox-run sandbox-log eval-run eval-pin eval-judge eval-tools eval-tools-judge record-pgo cache-clean hooks fetch-models fetch-modelsdev-pricing fetch-ollama-pricing
+.PHONY: vulncheck build install test test-unit test-integration test-e2e test-all test-coverage test-ollama test-gateway-routes check-cve scan sbom lint vet e2e clean sandbox-run sandbox-log eval-run eval-pin eval-judge eval-tools eval-tools-judge record-pgo cache-clean hooks fetch-models fetch-modelsdev-pricing fetch-ollama-pricing
 
 # No GOEXPERIMENT=simd: Go 1.27 changed the simd/archsimd intrinsics API, and
 # gomlx/compute's amd64 matmul kernels (gated on
@@ -163,6 +163,13 @@ test-coverage:
 
 test-ollama: build
 	@bash scripts/test-ollama-e2e.sh
+
+# Verifies pi resolves gateway route names of any shape. The assertions are on
+# the wire (endpoint, token field, context window), so a billing or quota error
+# still proves the routing was right. Pass routes to check others:
+#   make test-gateway-routes ROUTES="azure-llm/gpt-6-luna my-proxy/gpt-6-astra"
+test-gateway-routes: build
+	@bash scripts/test-gateway-routes-e2e.sh $(ROUTES)
 
 # Fails only on vulnerabilities that have a fix released; the rest are printed.
 # Same gate CI runs, so a red build reproduces here.

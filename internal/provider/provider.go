@@ -347,10 +347,42 @@ func StripKnownProviderPrefixes(modelName string) string {
 	return current
 }
 
+// BareModelID returns the last path segment of a model name, lowercased — the
+// model identifier a gateway forwards upstream.
+//
+// Model-capability questions ("is this a Responses-only model?", "does it accept
+// effort max?") are about the model, not about how a route reached it, and the
+// route prefix is unbounded: a gateway can expose any name it likes in front of
+// a model. StripKnownProviderPrefixes cannot answer that, because it strips only
+// prefixes pi-go already knows. A gateway route named azure-llm/gpt-6-luna
+// therefore survived stripping as "azure-llm/gpt-6-luna", failed every
+// strings.HasPrefix(lower, "gpt-6") check, and took the Chat Completions path
+// with max_completion_tokens — for a model that only accepts /v1/responses and
+// max_output_tokens. Measured: that request 404s.
+//
+// Taking the last segment fixes the whole class rather than one more name: it
+// works for azure-llm/, for a private proxy prefix, and for any future route,
+// with no list to keep in sync. Gateway route prefixes never contain a slash
+// themselves, so the final segment is the model id.
+func BareModelID(modelName string) string {
+	trimmed := strings.TrimSpace(modelName)
+	if i := strings.LastIndex(trimmed, "/"); i >= 0 {
+		trimmed = trimmed[i+1:]
+	}
+	return strings.ToLower(trimmed)
+}
+
 // longestPrefixSize resolves modelName against a prefix table, preferring the
 // longest match so "gpt-5.1" beats "gpt-5" and "o1-mini" beats "o1".
 func longestPrefixSize(sizes map[string]int64, modelName string) int64 {
-	lower := strings.ToLower(StripKnownProviderPrefixes(modelName))
+	// BareModelID, not StripKnownProviderPrefixes: the catalog is keyed on model
+	// ids, and a gateway route prefix is arbitrary. Matching on the known-prefix
+	// form left "azure-llm/gpt-6-luna" intact, found nothing, and returned 0 —
+	// which silently disables auto-compaction for a 1.05M-token model and warns
+	// "context window unknown". Measured: ContextWindowSizeFor("agentgateway",
+	// "agentgateway/azure-llm/gpt-6-luna") was 0 while the same model under a
+	// known prefix resolved to 1050000.
+	lower := BareModelID(modelName)
 	bestLen := 0
 	var bestSize int64
 	for prefix, size := range sizes {
