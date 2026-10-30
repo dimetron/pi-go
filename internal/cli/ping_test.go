@@ -313,7 +313,7 @@ func TestRunJSONContextCancelled(t *testing.T) {
 	cancel()
 
 	stdout := captureStdout(t, func() {
-		err := runJSON(ctx, ag, sessionID, "hello", nil)
+		err := runJSON(ctx, ag, sessionID, "hello", nil, "", "")
 		if err != nil {
 			t.Errorf("runJSON with canceled context returned error: %v", err)
 		}

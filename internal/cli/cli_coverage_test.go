@@ -316,7 +316,7 @@ func TestCliRunJSONNilLogger(t *testing.T) {
 	ag, sessionID := newTestAgent(t, llm)
 
 	stdout := captureStdout(t, func() {
-		err := runJSON(context.Background(), ag, sessionID, "hi", nil)
+		err := runJSON(context.Background(), ag, sessionID, "hi", nil, "", "")
 		if err != nil {
 			t.Fatalf("runJSON error: %v", err)
 		}
@@ -378,7 +378,7 @@ func TestCliRunJSONWithLogger(t *testing.T) {
 	ag, sessionID := newTestAgent(t, llm)
 
 	stdout := captureStdout(t, func() {
-		err := runJSON(context.Background(), ag, sessionID, "hello", lg)
+		err := runJSON(context.Background(), ag, sessionID, "hello", lg, "", "")
 		if err != nil {
 			t.Fatalf("runJSON error: %v", err)
 		}
@@ -414,7 +414,7 @@ func TestCliRunJSONCancelledContext(t *testing.T) {
 	cancel()
 
 	_ = captureStdout(t, func() {
-		_ = runJSON(ctx, ag, sessionID, "hello", nil)
+		_ = runJSON(ctx, ag, sessionID, "hello", nil, "", "")
 	})
 }
 
