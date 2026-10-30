@@ -191,6 +191,10 @@ func bashHandler(sb *Sandbox, sup *BashSupervisor, ctx agent.Context, input Bash
 		attribute.Bool("bash.backgrounded", out.Running),
 	)
 
+	// An unquoted heredoc can destroy a file while reporting success, so the
+	// failure has to be called out on a result that otherwise looks clean.
+	out.Note = appendNote(out.Note, heredocNote(input.Command, out))
+
 	return out, nil
 }
 
