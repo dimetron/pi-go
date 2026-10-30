@@ -182,3 +182,48 @@ func TestAppendNote(t *testing.T) {
 		}
 	}
 }
+
+func TestHeredocNote_EmptyEchoStillExplains(t *testing.T) {
+	// bash does not always echo the offending body — some versions emit only
+	// the diagnostic. The note must still explain the truncation instead of
+	// rendering an empty quote.
+	command := "cat > out.py <<EOF\nx = ${env.Y}\nEOF"
+	out := BashOutput{ExitCode: 0, Stderr: ": bad substitution\n"}
+	note := heredocNote(command, out)
+
+	if !strings.Contains(note, "a heredoc body was expanded") {
+		t.Errorf("empty echo should fall back to a generic description, got %q", note)
+	}
+	if strings.Contains(note, `""`) {
+		t.Errorf("note should not quote an empty string, got %q", note)
+	}
+}
+
+func TestHeredocNote_SkipsWhenNoUnquotedHeredoc(t *testing.T) {
+	// A 'bad substitution' with no expandable unquoted heredoc in the command is
+	// an ordinary bash error, not a truncation, and must not be annotated.
+	out := BashOutput{ExitCode: 0, Stderr: ": bad substitution\n"}
+	if note := heredocNote("echo hello", out); note != "" {
+		t.Errorf("expected no note without an unquoted heredoc, got %q", note)
+	}
+	if note := heredocNote("cat > x <<EOF\nplain body\nEOF", out); note != "" {
+		t.Errorf("expected no note when the body cannot expand, got %q", note)
+	}
+}
+
+func TestFirstLine_TruncatesLongText(t *testing.T) {
+	long := strings.Repeat("x", 200)
+	got := firstLine(long)
+	if len(got) > 80+len("...") {
+		t.Errorf("firstLine should bound the output, got %d chars", len(got))
+	}
+	if !strings.HasSuffix(got, "...") {
+		t.Errorf("truncated text should be marked, got %q", got)
+	}
+	if short := firstLine("abc"); short != "abc" {
+		t.Errorf("short text should pass through, got %q", short)
+	}
+	if multi := firstLine("first\nsecond"); multi != "first" {
+		t.Errorf("should keep only the first line, got %q", multi)
+	}
+}
