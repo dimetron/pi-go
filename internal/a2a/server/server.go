@@ -100,6 +100,21 @@ func Serve(ctx context.Context, cfg ServeConfig) error {
 		return fmt.Errorf("a2a serve: listen %s: %w", addr, err)
 	}
 
+	// Both listeners are bound before either server starts serving.
+	//
+	// Binding the readiness port after the main server was already accepting
+	// left a window in which /health answered while /readyz refused
+	// connections, so a probe that read healthy could still be unready — and an
+	// orchestrator gating on readiness would retry against a process that had
+	// announced itself. Binding here also means a failure to claim the
+	// readiness port happens before anything is serving, rather than after the
+	// main listener has already been advertised.
+	readyLn, err := net.Listen("tcp", readyAddr)
+	if err != nil {
+		_ = ln.Close()
+		return fmt.Errorf("a2a serve: listen ready %s: %w", readyAddr, err)
+	}
+
 	card := buildCard(ln.Addr().String())
 	executor := &piExecutor{handler: cfg.Handler, cwd: cfg.CWD, logger: logger, tasks: cfg.TaskStore}
 
@@ -171,12 +186,8 @@ func Serve(ctx context.Context, cfg ServeConfig) error {
 		errCh <- srv.Serve(ln)
 	}()
 
-	// Readiness server on ReadyAddr (Substrate probes /readyz:8081).
-	readyLn, err := net.Listen("tcp", readyAddr)
-	if err != nil {
-		_ = srv.Close()
-		return fmt.Errorf("a2a serve: listen ready %s: %w", readyAddr, err)
-	}
+	// Readiness server on ReadyAddr (Substrate probes /readyz:8081). The
+	// listener was bound above, alongside the main one.
 	readySrv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/readyz" {
 			http.NotFound(w, r)
