@@ -49,10 +49,19 @@ func editHandlerWithLedger(sb *Sandbox, input EditInput, ledger *ReadLedger) (Ed
 		return EditOutput{}, fmt.Errorf("file_path is required")
 	}
 	if input.OldString == "" {
-		return EditOutput{}, fmt.Errorf("old_string is required")
+		return EditOutput{}, fmt.Errorf(`old_string is required
+
+edit replaces an exact substring and needs the text to replace. A call carrying
+only file_path and new_string reads like a whole-file write, which this tool
+cannot do:
+- to replace specific text, pass old_string as well
+- to replace the entire file, use the write tool instead`)
 	}
 	if input.OldString == input.NewString {
-		return EditOutput{}, fmt.Errorf("old_string and new_string must be different")
+		return EditOutput{}, fmt.Errorf(`old_string and new_string must be different
+
+Both fields hold the same text, so this edit would write the file unchanged.
+Change new_string to the replacement text, or drop the call`)
 	}
 
 	var content string
@@ -131,43 +140,102 @@ const (
 	editRetryDelay = 100 // milliseconds between retries
 )
 
-// buildEditNotFoundError returns an enhanced error with preview and suggestions.
+// editContextLines is how many lines around the best candidate the not-found
+// error quotes. Enough to show the caller the real indentation and shape of the
+// region it meant to match, without pasting the file back into the transcript.
+const editContextLines = 3
+
+// buildEditNotFoundError builds the not-found error.
+//
+// Two details here are load-bearing, both learned from session logs:
+//
+// The old_string is echoed raw between delimiters rather than with %q. %q
+// doubles every backslash, and a model that transcribed "\n" as two characters
+// saw its own escaping worsen on each retry — \n became \\n became \\\n —
+// chasing a match against text the error itself had corrupted.
+//
+// The suggestion is the file window that best resembles the old_string, not a
+// single line. The previous test compared one line's length against the whole
+// old_string, which for a multi-line target could never be satisfied: across
+// logged failures, 39 of 70 not-found errors (56%) offered no suggestion at
+// all, and no retry could succeed.
 func buildEditNotFoundError(input EditInput, content string) error {
-	lines := strings.Split(content, "\n")
-	// Find closest matching lines to help suggest what might be wrong
-	var suggestions []string
-	for i, line := range lines {
-		if len(line) > 0 && len(input.OldString) > 0 {
-			// Look for similar lines (same length ±5, share some characters)
-			if abs(len(line)-len(input.OldString)) <= 5 {
-				similarity := stringsSimilarity(line, input.OldString)
-				if similarity > 0.5 {
-					suggestions = append(suggestions, fmt.Sprintf("line %d: %q", i+1, truncate(line, 60)))
-				}
-			}
-		}
-	}
-	var preview string
-	if len(lines) > 0 {
-		preview = truncate(lines[0], 500)
-	}
+	best, bestScore := bestEditContext(content, input.OldString)
+
 	var suggestionStr string
-	if len(suggestions) > 0 {
-		suggestionStr = fmt.Sprintf("\nSimilar lines found:\n  %s\n\nSuggestions:", strings.Join(suggestions, "\n  "))
+	if bestScore > 0 {
+		suggestionStr = fmt.Sprintf("Closest match in the file: line %d (similarity %.2f).\n", best.line, bestScore)
 	}
+
+	reason := editMismatchHint(input.OldString, content)
+
 	return fmt.Errorf(`old_string not found in file
 
-Expected:
-%q
+%s
 
-File preview (first 500 chars of first line):
+old_string sent, verbatim between the markers:
+<<<OLD_STRING
 %s
+OLD_STRING>>>
+
+%d-line window of the file nearest that text, verbatim:
+<<<FILE_WINDOW
 %s
-- Verify the exact text matches including whitespace and indentation
-- Use the Read tool to see current file content with correct line endings
-- Try a smaller, unique portion of the old_string
-- Use replace_all=true if replacing a repeated pattern`,
-		input.OldString, preview, suggestionStr)
+FILE_WINDOW>>>
+%s
+- Copy the text from a read of the file rather than retyping it
+- Verify indentation matches exactly: tabs against spaces is the commonest miss
+- Try a smaller, unique portion of the old_string`,
+		reason, input.OldString, editContextLines, best.text, suggestionStr)
+}
+
+// editMismatchHint names the specific character-level difference between the
+// old_string and the file when it is cheap and unambiguous to say so. A caller
+// that is one tab or one whitespace run away from a match should be told that,
+// rather than told to re-read a file it already read correctly.
+func editMismatchHint(oldString, content string) string {
+	norm := func(s string) string { return strings.Join(strings.Fields(s), " ") }
+	if oldString != "" && strings.Contains(norm(content), norm(oldString)) {
+		return "Diagnosis: the text differs from the file only in whitespace (tabs, spaces, or line wrapping)."
+	}
+	if strings.Contains(oldString, `\n`) || strings.Contains(oldString, `\t`) {
+		return `Diagnosis: old_string contains literal backslash-n or backslash-t sequences. Real newlines and tabs belong in old_string unescaped.`
+	}
+	return "Diagnosis: the text is not present in the file, in whole or in part."
+}
+
+// editContext is the best-matching window of the file for a failed old_string.
+type editContext struct {
+	line  int // 1-based line the window starts on; 0 when nothing matched
+	score float64
+	text  string
+}
+
+// bestEditContext finds the file window most similar to oldString.
+//
+// Similarity is the character set overlap between the window and the old_string
+// (see stringsSimilarity), so it is insensitive to length and survives the
+// whitespace and transcription drift that causes most misses. A window
+// containing newlines is scored because that is the shape real targets have;
+// scoring single lines only, as this once did, could never represent one.
+func bestEditContext(content, oldString string) (best editContext, bestScore float64) {
+	if oldString == "" {
+		return editContext{}, 0
+	}
+	lines := strings.Split(content, "\n")
+	for i := range lines {
+		end := min(i+editContextLines, len(lines))
+		window := strings.Join(lines[i:end], "\n")
+		if strings.TrimSpace(window) == "" {
+			continue
+		}
+		score := stringsSimilarity(window, oldString)
+		if score > bestScore {
+			bestScore = score
+			best = editContext{line: i + 1, score: score, text: window}
+		}
+	}
+	return best, bestScore
 }
 
 func truncate(s string, max int) string {
@@ -185,22 +253,31 @@ func abs(x int) int {
 }
 
 // stringsSimilarity returns a score 0..1 indicating how similar two strings are.
-// Uses a simple character-based Jaccard-like comparison.
+// Uses a character-based Jaccard comparison over distinct runes.
+//
+// Both sets are deduplicated before the intersection is counted. The earlier
+// version counted a rune once per occurrence in b while measuring the union in
+// bytes, which let the result exceed 1 — a caller comparing against a threshold
+// could not tell a near miss from an exact match.
 func stringsSimilarity(a, b string) float64 {
-	if len(a) == 0 || len(b) == 0 {
+	setA := make(map[rune]struct{})
+	for _, r := range a {
+		setA[r] = struct{}{}
+	}
+	setB := make(map[rune]struct{})
+	for _, r := range b {
+		setB[r] = struct{}{}
+	}
+	if len(setA) == 0 || len(setB) == 0 {
 		return 0
 	}
-	setA := make(map[rune]bool)
-	for _, r := range a {
-		setA[r] = true
-	}
 	intersection := 0
-	for _, r := range b {
-		if setA[r] {
+	for r := range setB {
+		if _, ok := setA[r]; ok {
 			intersection++
 		}
 	}
-	union := len(setA) + len(b) - intersection
+	union := len(setA) + len(setB) - intersection
 	if union == 0 {
 		return 0
 	}
