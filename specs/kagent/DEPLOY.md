@@ -257,6 +257,22 @@ a blank `READY`, for the stock `kagent` Harness as much as for `pi-go`, and a
 Harness that is admitted but broken still shows up as `Ready=False` on its
 AgentTemplate.
 
+> **Changed at kagent v1.0.0-rc1.** The controller no longer writes *either*
+> status: rc1 removed `HarnessStatus` and the AgentTemplate status subresource
+> entirely (`kagent#3454`). On rc1 the `status.harnesses[0].conditions` query
+> above returns nothing, and the readiness surface is `Agent.status`
+> (`conditions`, `desiredRevision`, `latestSuccessfulRevision`,
+> `observedGeneration`, `warnings`, `workloadImage`):
+>
+> ```bash
+> kubectl get agent <name> -n kagent \
+>   -o jsonpath='{range .status.conditions[*]}{.type}={.status} {.reason}{"\n"}{end}'
+> ```
+>
+> The AgentTemplate conditions described above are correct for v1alpha3
+> controllers before rc1. See [kagent-substrate-rc1.md](../../docs/kagent-substrate-rc1.md).
+
+
 If preparation fails, inspect the controller:
 
 ```bash
