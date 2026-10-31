@@ -486,7 +486,7 @@ func TestRunJSONTextDelta(t *testing.T) {
 	ag, sessionID := newTestAgent(t, llm)
 
 	stdout := captureStdout(t, func() {
-		err := runJSON(context.Background(), ag, sessionID, "Say hello", nil)
+		err := runJSON(context.Background(), ag, sessionID, "Say hello", nil, "", "")
 		if err != nil {
 			t.Fatalf("runJSON error: %v", err)
 		}
@@ -575,7 +575,7 @@ func TestRunJSONToolCallEvents(t *testing.T) {
 	sessionID, _, _ := ag.CreateSession(ctx)
 
 	stdout := captureStdout(t, func() {
-		err := runJSON(ctx, ag, sessionID, "Read the file", nil)
+		err := runJSON(ctx, ag, sessionID, "Read the file", nil, "", "")
 		if err != nil {
 			t.Fatalf("runJSON error: %v", err)
 		}
@@ -628,7 +628,7 @@ func TestRunJSONValidJSONL(t *testing.T) {
 	ag, sessionID := newTestAgent(t, llm)
 
 	stdout := captureStdout(t, func() {
-		_ = runJSON(context.Background(), ag, sessionID, "Test", nil)
+		_ = runJSON(context.Background(), ag, sessionID, "Test", nil, "", "")
 	})
 
 	// Every line should be valid JSON.
@@ -1241,7 +1241,7 @@ func TestRunJSONAgentError(t *testing.T) {
 	ag, sessionID := newTestAgent(t, llm)
 
 	stdout := captureStdout(t, func() {
-		err := runJSON(context.Background(), ag, sessionID, "hello", nil)
+		err := runJSON(context.Background(), ag, sessionID, "hello", nil, "", "")
 		if err == nil {
 			t.Error("expected runJSON to return an error when LLM errors and ctx is not canceled")
 		}
@@ -1261,7 +1261,7 @@ func TestRunJSONThinkingDelta(t *testing.T) {
 	ag, sessionID := newTestAgent(t, llm)
 
 	stdout := captureStdout(t, func() {
-		if err := runJSON(context.Background(), ag, sessionID, "think about it", nil); err != nil {
+		if err := runJSON(context.Background(), ag, sessionID, "think about it", nil, "", ""); err != nil {
 			t.Errorf("runJSON error: %v", err)
 		}
 	})

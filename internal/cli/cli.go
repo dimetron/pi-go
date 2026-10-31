@@ -1211,7 +1211,7 @@ func dispatchMode(ctx context.Context, mode, prompt string, ag *agent.Agent, ses
 		return nil
 	}
 	if mode == "json" {
-		return runJSON(ctx, ag, sessionID, prompt, sessionLog)
+		return runJSON(ctx, ag, sessionID, prompt, sessionLog, modelName, providerName)
 	}
 	return runPrint(ctx, ag, sessionID, prompt, sessionLog, providerName)
 }
@@ -1854,12 +1854,35 @@ type jsonEvent struct {
 	ToolInput any    `json:"tool_input,omitempty"`
 	SessionID string `json:"session_id,omitempty"`
 	Error     string `json:"error,omitempty"`
+	// Usage is set on message_end only, and only when at least one provider
+	// response in the run reported usage. Consumers that ignore it keep
+	// working unchanged.
+	Usage *jsonUsage `json:"usage,omitempty"`
+}
+
+// jsonUsage is the provider-reported token usage for one run, summed across
+// every response. It is deliberately reported rather than estimated: consumers
+// that want a token count should not have to divide a character count by four.
+//
+// The field names match what Harbor's agent context reads (n_input_tokens,
+// n_output_tokens, n_cache_tokens), so a Terminal-Bench adapter can map them
+// straight through.
+type jsonUsage struct {
+	InputTokens     int     `json:"input_tokens"`
+	OutputTokens    int     `json:"output_tokens"`
+	CachedTokens    int     `json:"cached_tokens"`
+	ThoughtTokens   int     `json:"thought_tokens,omitempty"`
+	TotalTokens     int     `json:"total_tokens"`
+	CostUSD         float64 `json:"cost_usd,omitempty"`
+	ResponsesPriced int     `json:"responses_priced,omitempty"`
 }
 
 // runJSON runs the agent and emits JSONL events to stdout.
 // Events: message_start (once), text_delta (one per sentence, or per text chunk
-// under --json-deltas full), tool_call, tool_result, message_end (once).
-func runJSON(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log *logger.Logger) error {
+// under --json-deltas full), tool_call, tool_result, message_end (once, carrying
+// the run's token usage when the provider reported any).
+func runJSON(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log *logger.Logger, modelName, providerName string) error {
+	usage := &usageAccumulator{model: modelName, provider: providerName}
 	log.UserMessage(prompt)
 	// Auto-set the session title for JSON mode too. The first jsonEvent
 	// carries session_id, so the title is just metadata to keep meta.json
@@ -1884,7 +1907,7 @@ func runJSON(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log
 		if err != nil {
 			if ctx.Err() != nil {
 				em.flush()
-				em.emit(jsonEvent{Type: "message_end"})
+				em.emit(jsonEvent{Type: "message_end", Usage: usage.snapshot()})
 				return nil
 			}
 			log.Error(err.Error())
@@ -1893,6 +1916,10 @@ func runJSON(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log
 		if ev == nil {
 			continue
 		}
+		// Usage is recorded before the content checks below: the aggregate
+		// response that carries it can arrive with a nil Content, and skipping
+		// it there would lose the run's token count entirely.
+		usage.add(ev)
 		// Emit provider failures as an explicit `error` event so consumers can
 		// tell a failed run from an empty one. See agent.EventError.
 		if evErr := agent.EventError(ev); evErr != nil {
@@ -1925,7 +1952,7 @@ func runJSON(ctx context.Context, ag *agent.Agent, sessionID, prompt string, log
 		fmt.Fprintln(os.Stderr, warn)
 		log.Error(warn)
 	}
-	em.emit(jsonEvent{Type: "message_end"})
+	em.emit(jsonEvent{Type: "message_end", Usage: usage.snapshot()})
 	return nil
 }
 
