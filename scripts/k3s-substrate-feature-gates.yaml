@@ -1,0 +1,35 @@
+# k3s config for running Agent Substrate v1.0.0-rc1.
+#
+# Copy to /etc/rancher/k3s/config.yaml and restart k3s:
+#
+#   sudo cp scripts/k3s-substrate-feature-gates.yaml /etc/rancher/k3s/config.yaml
+#   sudo systemctl restart k3s
+#
+# Without these, the substrate chart refuses to render:
+#
+#   REQUIRED Kubernetes feature gates:
+#     - ClusterTrustBundle
+#     - ClusterTrustBundleProjection
+#     - PodCertificateRequest
+#   The certificates.k8s.io/v1beta1 API must also be enabled.
+#
+# All three gates are needed on the API server and the kubelet: the API server
+# serves the podcertificaterequests and clustertrustbundles APIs, and the kubelet
+# is the client that issues PodCertificateRequests for projected volumes. The
+# controller-manager gate is included so its signer controller participates.
+#
+# Verified on k3s v1.36.5+k3s1 (aarch64). After restarting, confirm the APIs are
+# served:
+#
+#   kubectl api-resources | grep -iE 'podcertificate|clustertrustbundle'
+#   kubectl api-versions | grep certificates
+#
+# Expect podcertificaterequests and clustertrustbundles under
+# certificates.k8s.io/v1beta1, and certificates.k8s.io/v1beta1 in api-versions.
+kube-apiserver-arg:
+  - "feature-gates=PodCertificateRequest=true,ClusterTrustBundle=true,ClusterTrustBundleProjection=true"
+  - "runtime-config=certificates.k8s.io/v1beta1=true"
+kube-controller-manager-arg:
+  - "feature-gates=PodCertificateRequest=true,ClusterTrustBundle=true,ClusterTrustBundleProjection=true"
+kubelet-arg:
+  - "feature-gates=PodCertificateRequest=true,ClusterTrustBundle=true,ClusterTrustBundleProjection=true"
