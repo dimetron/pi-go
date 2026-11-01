@@ -79,6 +79,16 @@ in `kagent.session_task` and a clean reply. Treat the variable as **required**
 for this controller generation and re-test before removing it after a kagent
 upgrade.
 
+> **Counter-measurement on `v1.0.0-alpha17-68-g4099410a`: the variable is not
+> required.** On that controller a `pi-go` Harness with an empty `spec.env` — no
+> `KAGENT_TASK_STORE_ADDRESS` at all — completed a turn and wrote
+> `TASK_STATE_COMPLETED` to `kagent.session_task`, with `NATIVE-OK` in the task
+> body. So the requirement above is specific to the alpha14 generation, not to
+> "this controller generation" generally. The `task not found` symptom has more
+> than one cause: it also appears when the *client* and controller disagree about
+> version, and the task is never persisted in the first place. Check
+> `kagent.session_task` for a row before concluding the task store is misconfigured.
+
 ### MCP tools and credentials
 
 An AgentTemplate's `spec.tools` entries are **not** delivered through the Harness
