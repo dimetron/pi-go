@@ -133,7 +133,7 @@ Worth stating because the version number suggests otherwise.
 
 ## Prepare the deployment
 
-The repo script wraps the five releases with the values below:
+The repo script wraps the releases in the order that actually succeeds:
 
 ```bash
 ./scripts/install-kagent-substrate.sh --dry-run     # prints, changes nothing
@@ -141,7 +141,47 @@ The repo script wraps the five releases with the values below:
 ```
 
 Options: `--worker-replicas`, `--sandbox-class gvisor|microvm`, `--namespace`,
-`--provider`, `--skip-crds`. `KAGENT_VERSION` overrides the pinned version.
+`--provider`, `--ate-setup PATH`, `--skip-crds`. `KAGENT_VERSION` and
+`SUBSTRATE_VERSION` override the pinned versions.
+
+### The install order is not the chart's dependency order
+
+Five places need more than `helm install` in sequence. Each was hit bringing rc1
+up on aarch64 k3s (v1.36.5+k3s1):
+
+| # | What happens with the naive order | What the script does |
+|---|---|---|
+| 1 | podcertificate controller mounts three CA-pool Secrets no chart creates, and wedges in `FailedMount` | `kubectl ate admin make-ca-pool` ×3 **first** |
+| 2 | ate-api-server mounts `actor-id-ca-pool`, `actor-id-jwt-pool`, `ate-api-authentication` — none are chart output | `ate-setup create …` **before** substrate |
+| 3 | kagent cannot reach Substrate's bundled Postgres (see below) | deploy a **separate** Postgres for kagent |
+| 4 | controller fails `invalid PostgreSQL connection string` | DSN uses the mounted CA path `/run/substrate-servicedns/…` |
+| 5 | substrate chart refuses to render | feature gates on the API server and kubelet |
+
+### kagent does not share Substrate's PostgreSQL
+
+The substrate chart ships this NetworkPolicy, with the intent stated in a comment
+above it — *"The bundled postgres is reached only by ate-api-server"*:
+
+```yaml
+spec:
+  podSelector: {matchLabels: {app: postgres}}
+  ingress:
+  - from: [{podSelector: {matchLabels: {app: ate-api-server}}}]   # and nothing else
+```
+
+kagent's controller runs in namespace `kagent` and can never satisfy
+`app=ate-api-server`, so no configuration of the connection string will work.
+The script therefore deploys its own `postgres:18-alpine` in the kagent
+namespace and points the chart at it through
+`database.postgres.{owner,readWrite}ConnectionStringSecretRef` — the same shape
+the working Kind install uses.
+
+Two name families meet here and are not interchangeable:
+
+- podcert **logins**: `kagent_owner_user`, `kagent_readwrite_user` — these must
+  match the `postgres.podcert.ate.dev/username` annotation in kagent's own
+  controller deployment
+- SQL **roles** assumed after connecting: `kagent_owner`, `kagent_readwrite`
 
 ### Values that matter
 
@@ -179,19 +219,34 @@ controller:
     enabled: true
 database:
   postgres:
-    clientCertificate:
-      enabled: true
+    ownerConnectionStringSecretRef:
+      name: kagent-postgres-owner
+      key: ownerConnectionString
+    readWriteConnectionStringSecretRef:
+      name: kagent-postgres-readwrite
+      key: readWriteConnectionString
 substrateWorkerPool:
   create: true
   replicas: 5
   workerImage: ghcr.io/kagent-dev/substrate/ateworker-gvisor:v1.0.0-rc1
 ```
 
+Note the two `*ConnectionStringSecretRef` entries: without them the chart falls
+back to the bundled Postgres, which the NetworkPolicy above makes unreachable.
+
 ## Prerequisites not automated
 
-- A Kind cluster and a current `kubectl` context.
+- A cluster and a current `kubectl` context.
 - **cert-manager**, including its CRDs, because `substrate-podcert` issues the
   Postgres client certificates through it.
+- The **feature gates** `PodCertificateRequest`, `ClusterTrustBundle` and
+  `ClusterTrustBundleProjection`, plus the `certificates.k8s.io/v1beta1` API.
+  On k3s, `scripts/k3s-substrate-feature-gates.yaml` is a ready config; copy it
+  to `/etc/rancher/k3s/config.yaml` and restart k3s.
+- **`kubectl-ate`** from the substrate release, and **`ate-setup`** built from
+  the substrate source tree (`go build ./cmd/ate-setup`). `ate-setup` resolves
+  its manifests relative to the repository, so it must be run from inside the
+  checkout — from elsewhere it fails with `no go.mod found above /`.
 - A model provider credential. The rc1 CLI export assumes `OPENAI_API_KEY`; set
   `--provider` and the matching key for anything else.
 
