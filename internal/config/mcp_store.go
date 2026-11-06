@@ -223,6 +223,11 @@ func mcpServerEntry(srv MCPServer) (map[string]any, error) {
 	return entry, nil
 }
 
+// mcpCreateTemp creates the temporary file a document is written to before being
+// renamed into place. It is a variable so a test can hand back a file the write
+// will fail on and check that the failure path cleans up.
+var mcpCreateTemp = os.CreateTemp
+
 // writeJSONDocument writes doc to path atomically: a temporary file in the same
 // directory is renamed over the target, so a crash mid-write leaves the previous
 // mcp.json intact instead of a truncated one.
@@ -237,7 +242,7 @@ func writeJSONDocument(path string, doc map[string]any) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("creating %s: %w", dir, err)
 	}
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-")
+	tmp, err := mcpCreateTemp(dir, "."+filepath.Base(path)+".tmp-")
 	if err != nil {
 		return fmt.Errorf("creating temp file for %s: %w", path, err)
 	}

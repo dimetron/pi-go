@@ -245,6 +245,12 @@ The server must be configured first — see ` + "`pi mcp add`" + `.`,
 	return cmd
 }
 
+// mcpLoginFn runs the authorization flow. It is a variable so a test can drive
+// all three outcomes — cached credentials reused, freshly authorized, failed —
+// without an authorization server to talk to. Production leaves it as
+// extension.LoginMCP.
+var mcpLoginFn = extension.LoginMCP
+
 func runMCPLogin(cmd *cobra.Command, name string) error {
 	srv, err := lookupMCPServer(name)
 	if err != nil {
@@ -258,7 +264,7 @@ func runMCPLogin(cmd *cobra.Command, name string) error {
 	out := cmd.OutOrStdout()
 	fmt.Fprintf(out, "Authorizing MCP server %q at %s\n", srv.Name, srv.URL)
 
-	err = extension.LoginMCP(cmd.Context(), srv)
+	err = mcpLoginFn(cmd.Context(), srv)
 	switch {
 	case errors.Is(err, extension.ErrMCPLoginReusedToken):
 		fmt.Fprintf(out, "Already authorized — cached credentials for %q are still valid.\n", srv.Name)

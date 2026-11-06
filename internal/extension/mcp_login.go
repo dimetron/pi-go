@@ -49,10 +49,6 @@ func LoginMCP(ctx context.Context, srv MCPServerConfig) error {
 	if err != nil {
 		return fmt.Errorf("preparing OAuth login for %q: %w", srv.Name, err)
 	}
-	if _, ok := handler.(*mcpTokenOnlyHandler); ok {
-		// Only reachable if a future change skips the interactive branch above.
-		return fmt.Errorf("OAuth login for %q requires an interactive terminal", srv.Name)
-	}
 
 	// Whatever is cached now is either about to be replaced or is already
 	// valid. Discarding it first would force a needless browser round-trip
@@ -87,17 +83,36 @@ func LoginMCP(ctx context.Context, srv MCPServerConfig) error {
 	}
 
 	after, ok := cachedTokenFingerprint(srv)
-	if !ok {
-		return fmt.Errorf("connected to %q but no token was cached; the server may not require authorization", srv.Name)
+	return loginOutcome(srv.Name, before, hadToken, after, ok)
+}
+
+// loginOutcome turns what login observed about the token cache into its result.
+//
+// It is a separate pure function because the decision has four cases and only two
+// of them are reachable without an authorization server to mint a token against:
+// a test of the whole command can exercise "reused" and "no token", but not
+// "freshly authorized", which is the ordinary successful case. Splitting the
+// decision out is what makes that case testable at all.
+func loginOutcome(name, before string, hadToken bool, after string, cached bool) error {
+	if !cached {
+		// The server answered without demanding credentials, so there was
+		// nothing to authorize and nothing was issued.
+		return fmt.Errorf("%w: connected to %q but no token was cached; the server may not require authorization",
+			errLoginNoToken, name)
 	}
 	if hadToken && after == before {
 		// A cached token was presented and accepted, so nothing new was issued.
-		// That is a success for the user's purpose and is reported as reuse
-		// rather than as a fresh login.
+		// That is a success for the user's purpose, reported as reuse rather
+		// than as a fresh login.
 		return ErrMCPLoginReusedToken
 	}
 	return nil
 }
+
+// errLoginNoToken reports that the server answered without ever asking for
+// credentials, so login had nothing to store. It is a sentinel so the outcome
+// decision can be asserted without matching on message text.
+var errLoginNoToken = errors.New("no token issued")
 
 // ErrMCPLoginReusedToken reports that login found working cached credentials and
 // did not need to run the browser flow. It is a success, exported as a sentinel
