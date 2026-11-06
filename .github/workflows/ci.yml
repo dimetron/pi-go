@@ -56,7 +56,7 @@ jobs:
           # internal/goarch, export data version 5 is greater than maximum
           # supported version 4"), not as a lint finding about our code.
           # Bumping the go directive past 1.27.1 requires bumping this too.
-          version: v2.14
+          version: v2.15.0
 
   vulncheck:
     name: Vulncheck
