@@ -1,6 +1,6 @@
 {
   "provider": "gemini",
-  "fetched_at": "2026-10-29T00:00:00Z",
+  "fetched_at": "2026-11-06T00:00:00Z",
   "models": [
     {
       "id": "antigravity-preview-05-2026",
@@ -13,10 +13,6 @@
     {
       "id": "antigravity-preview-latest",
       "owned_by": "Antigravity Agent Preview Latest"
-    },
-    {
-      "id": "aqa",
-      "owned_by": "Model that performs Attributed Question Answering."
     },
     {
       "id": "deep-research-max-preview-04-2026",
@@ -183,6 +179,10 @@
     {
       "id": "gemini-omni-1.1-flash",
       "owned_by": "Gemini Omni 1.1 Flash"
+    },
+    {
+      "id": "gemini-omni-1.2-flash",
+      "owned_by": "Gemini Omni 1.2 Flash"
     },
     {
       "id": "gemini-pro-latest",

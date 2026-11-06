@@ -1,6 +1,6 @@
 {
   "provider": "openrouter",
-  "fetched_at": "2026-10-29T00:00:00Z",
+  "fetched_at": "2026-11-06T00:00:00Z",
   "models": [
     {
       "id": "amazon/nova-2-lite-v1",
@@ -247,6 +247,12 @@
       "release_date": "2026-10-06"
     },
     {
+      "id": "google/gemini-omni-1.1-flash"
+    },
+    {
+      "id": "google/gemini-omni-1.2-flash"
+    },
+    {
       "id": "google/gemma-4-26b-a4b-it",
       "release_date": "2026-04-02"
     },
@@ -281,30 +287,6 @@
     {
       "id": "meta/muse-spark-open",
       "release_date": "2026-10-15"
-    },
-    {
-      "id": "minimax/minimax-01",
-      "release_date": "2025-01-15"
-    },
-    {
-      "id": "minimax/minimax-m1",
-      "release_date": "2025-06-17"
-    },
-    {
-      "id": "minimax/minimax-m2",
-      "release_date": "2025-10-27"
-    },
-    {
-      "id": "minimax/minimax-m2-her",
-      "release_date": "2026-01-23"
-    },
-    {
-      "id": "minimax/minimax-m2.1",
-      "release_date": "2025-12-23"
-    },
-    {
-      "id": "minimax/minimax-m2.5",
-      "release_date": "2026-02-12"
     },
     {
       "id": "minimax/minimax-m2.7",
@@ -371,12 +353,20 @@
       "release_date": "2025-08-13"
     },
     {
+      "id": "mistralai/mistral-nemo",
+      "release_date": "2024-07-01"
+    },
+    {
       "id": "mistralai/mistral-saba",
       "release_date": "2025-02-17"
     },
     {
       "id": "mistralai/mistral-small-2603",
       "release_date": "2026-03-16"
+    },
+    {
+      "id": "mistralai/mistral-small-3.2-24b-instruct",
+      "release_date": "2025-06-20"
     },
     {
       "id": "mistralai/mixtral-8x22b-instruct",
@@ -393,6 +383,14 @@
     {
       "id": "moonshotai/kimi-k3",
       "release_date": "2026-07-16"
+    },
+    {
+      "id": "moonshotai/kimi-k3.1-pro",
+      "release_date": "2026-07-16"
+    },
+    {
+      "id": "nvidia/nemotron-3.5-lightning",
+      "release_date": "2026-08-11"
     },
     {
       "id": "nvidia/switchyard"
@@ -696,6 +694,9 @@
       "id": "openrouter/auto-beta"
     },
     {
+      "id": "openrouter/auto-code"
+    },
+    {
       "id": "openrouter/bodybuilder"
     },
     {
@@ -729,20 +730,15 @@
       "release_date": "2025-03-07"
     },
     {
-      "id": "poolside/laguna-s-2.1",
-      "release_date": "2026-07-21"
-    },
-    {
-      "id": "poolside/laguna-xs-2.1",
-      "release_date": "2026-07-02"
-    },
-    {
       "id": "qwen/qwen3-coder-30b-a3b-instruct",
       "release_date": "2025-04"
     },
     {
       "id": "qwen/qwen3.8-27b",
       "release_date": "2026-08-14"
+    },
+    {
+      "id": "stealth/crouton-alpha"
     },
     {
       "id": "typesafe/jev-router"
@@ -776,7 +772,15 @@
       "release_date": "2026-08-12"
     },
     {
+      "id": "x-ai/grok-4.6:batch",
+      "release_date": "2026-08-12"
+    },
+    {
       "id": "x-ai/grok-4.7",
+      "release_date": "2026-09-21"
+    },
+    {
+      "id": "x-ai/grok-4.7:batch",
       "release_date": "2026-09-21"
     },
     {
@@ -833,6 +837,10 @@
     },
     {
       "id": "z-ai/glm-5.3-flashx",
+      "release_date": "2026-09-18"
+    },
+    {
+      "id": "z-ai/glm-5.3-flashx-legal",
       "release_date": "2026-09-18"
     },
     {

@@ -367,10 +367,10 @@ func TestPriceAmount(t *testing.T) {
 }
 
 func TestEnrichAndFilterModels(t *testing.T) {
-	// gpt-image-1 is deprecated, released 2025-04-24, unpriced — filtered.
+	// gpt-image-1-mini is deprecated, released 2025-09-26, unpriced — filtered.
 	// gpt-5.5 is priced and current — kept, with its release date annotated.
 	in := []provider.ModelInfo{
-		{ID: "gpt-image-1"},
+		{ID: "gpt-image-1-mini"},
 		{ID: "gpt-5.5"},
 	}
 	out := enrichAndFilterModels("openai", in)
