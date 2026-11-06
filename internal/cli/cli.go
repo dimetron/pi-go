@@ -289,6 +289,7 @@ Set a default in ~/.pi-go/config.json so --model is only needed to deviate;
 	cmd.AddCommand(newVerifyCmd())
 	cmd.AddCommand(newPluginCmd())
 	cmd.AddCommand(newSkillsCmd())
+	cmd.AddCommand(newMCPCmd())
 
 	return cmd
 }
