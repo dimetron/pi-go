@@ -1,6 +1,11 @@
 {
- "fetched_at": "2026-10-23T00:00:00Z",
+ "fetched_at": "2026-11-06T00:00:00Z",
  "models": {
+  "beam": {
+   "cache_read": 0.015,
+   "input": 0.125,
+   "output": 0.4
+  },
   "deepseek-v4-pro": {
    "cache_read": 0.022,
    "input": 0.66,
@@ -56,6 +61,21 @@
    "input": 3.0,
    "output": 15.0
   },
+  "kimi-k3.1-pro": {
+   "cache_read": 0.2,
+   "input": 2.0,
+   "output": 10.0
+  },
+  "mimo-v2.6-flash": {
+   "cache_read": 0.0028,
+   "input": 0.14,
+   "output": 0.28
+  },
+  "mimo-v2.6-pro": {
+   "cache_read": 0.0036,
+   "input": 0.435,
+   "output": 0.87
+  },
   "minimax-m2.7": {
    "cache_read": 0.06,
    "input": 0.3,
@@ -78,8 +98,8 @@
   },
   "mistral-large-4": {
    "cache_read": 0.07,
-   "input": 0.68,
-   "output": 2.09
+   "input": 0.7,
+   "output": 2.1
   },
   "muse-spark-open": {
    "cache_read": 0.15,

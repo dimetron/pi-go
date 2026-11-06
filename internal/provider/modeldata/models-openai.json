@@ -1,11 +1,7 @@
 {
   "provider": "openai",
-  "fetched_at": "2026-10-29T00:00:00Z",
+  "fetched_at": "2026-11-06T00:00:00Z",
   "models": [
-    {
-      "id": "babbage-002",
-      "owned_by": "system"
-    },
     {
       "id": "chat-latest",
       "owned_by": "system"
@@ -13,60 +9,6 @@
     {
       "id": "chatgpt-image-latest",
       "owned_by": "system"
-    },
-    {
-      "id": "davinci-002",
-      "owned_by": "system"
-    },
-    {
-      "id": "gpt-3.5-turbo",
-      "owned_by": "openai",
-      "release_date": "2023-03-01"
-    },
-    {
-      "id": "gpt-3.5-turbo-0125",
-      "owned_by": "system",
-      "release_date": "2023-03-01"
-    },
-    {
-      "id": "gpt-3.5-turbo-1106",
-      "owned_by": "system",
-      "release_date": "2023-03-01"
-    },
-    {
-      "id": "gpt-3.5-turbo-16k",
-      "owned_by": "openai-internal",
-      "release_date": "2023-03-01"
-    },
-    {
-      "id": "gpt-3.5-turbo-instruct",
-      "owned_by": "system",
-      "release_date": "2023-03-01"
-    },
-    {
-      "id": "gpt-3.5-turbo-instruct-0914",
-      "owned_by": "system",
-      "release_date": "2023-03-01"
-    },
-    {
-      "id": "gpt-4",
-      "owned_by": "openai",
-      "release_date": "2023-11-06"
-    },
-    {
-      "id": "gpt-4-0613",
-      "owned_by": "openai",
-      "release_date": "2023-11-06"
-    },
-    {
-      "id": "gpt-4-turbo",
-      "owned_by": "system",
-      "release_date": "2023-11-06"
-    },
-    {
-      "id": "gpt-4-turbo-2024-04-09",
-      "owned_by": "system",
-      "release_date": "2023-11-06"
     },
     {
       "id": "gpt-4.1",
@@ -89,22 +31,7 @@
       "release_date": "2025-04-14"
     },
     {
-      "id": "gpt-4.1-nano",
-      "owned_by": "system",
-      "release_date": "2025-04-14"
-    },
-    {
-      "id": "gpt-4.1-nano-2025-04-14",
-      "owned_by": "system",
-      "release_date": "2025-04-14"
-    },
-    {
       "id": "gpt-4o",
-      "owned_by": "system",
-      "release_date": "2024-05-13"
-    },
-    {
-      "id": "gpt-4o-2024-05-13",
       "owned_by": "system",
       "release_date": "2024-05-13"
     },
@@ -125,16 +52,6 @@
     },
     {
       "id": "gpt-4o-mini-2024-07-18",
-      "owned_by": "system",
-      "release_date": "2024-07-18"
-    },
-    {
-      "id": "gpt-4o-mini-search-preview",
-      "owned_by": "system",
-      "release_date": "2024-07-18"
-    },
-    {
-      "id": "gpt-4o-mini-search-preview-2025-03-11",
       "owned_by": "system",
       "release_date": "2024-07-18"
     },
@@ -169,16 +86,6 @@
       "release_date": "2024-07-18"
     },
     {
-      "id": "gpt-4o-search-preview",
-      "owned_by": "system",
-      "release_date": "2024-05-13"
-    },
-    {
-      "id": "gpt-4o-search-preview-2025-03-11",
-      "owned_by": "system",
-      "release_date": "2024-05-13"
-    },
-    {
       "id": "gpt-4o-transcribe",
       "owned_by": "system",
       "release_date": "2024-05-13"
@@ -195,16 +102,6 @@
     },
     {
       "id": "gpt-5-2025-08-07",
-      "owned_by": "system",
-      "release_date": "2025-08-07"
-    },
-    {
-      "id": "gpt-5-chat-latest",
-      "owned_by": "system",
-      "release_date": "2025-08-07"
-    },
-    {
-      "id": "gpt-5-codex",
       "owned_by": "system",
       "release_date": "2025-08-07"
     },
@@ -259,42 +156,12 @@
       "release_date": "2025-11-13"
     },
     {
-      "id": "gpt-5.1-chat-latest",
-      "owned_by": "system",
-      "release_date": "2025-11-13"
-    },
-    {
-      "id": "gpt-5.1-codex",
-      "owned_by": "system",
-      "release_date": "2025-11-13"
-    },
-    {
-      "id": "gpt-5.1-codex-max",
-      "owned_by": "system",
-      "release_date": "2025-11-13"
-    },
-    {
-      "id": "gpt-5.1-codex-mini",
-      "owned_by": "system",
-      "release_date": "2025-11-13"
-    },
-    {
       "id": "gpt-5.2",
       "owned_by": "system",
       "release_date": "2025-12-11"
     },
     {
       "id": "gpt-5.2-2025-12-11",
-      "owned_by": "system",
-      "release_date": "2025-12-11"
-    },
-    {
-      "id": "gpt-5.2-chat-latest",
-      "owned_by": "system",
-      "release_date": "2025-12-11"
-    },
-    {
-      "id": "gpt-5.2-codex",
       "owned_by": "system",
       "release_date": "2025-12-11"
     },
@@ -307,11 +174,6 @@
       "id": "gpt-5.2-pro-2025-12-11",
       "owned_by": "system",
       "release_date": "2025-12-11"
-    },
-    {
-      "id": "gpt-5.3-chat-latest",
-      "owned_by": "system",
-      "release_date": "2026-03-03"
     },
     {
       "id": "gpt-5.3-codex",
@@ -434,10 +296,6 @@
       "owned_by": "system"
     },
     {
-      "id": "gpt-audio-mini-2025-10-06",
-      "owned_by": "system"
-    },
-    {
       "id": "gpt-audio-mini-2025-12-15",
       "owned_by": "system"
     },
@@ -496,26 +354,6 @@
       "owned_by": "system"
     },
     {
-      "id": "o1",
-      "owned_by": "system",
-      "release_date": "2024-12-05"
-    },
-    {
-      "id": "o1-2024-12-17",
-      "owned_by": "system",
-      "release_date": "2024-12-05"
-    },
-    {
-      "id": "o1-pro",
-      "owned_by": "system",
-      "release_date": "2025-03-19"
-    },
-    {
-      "id": "o1-pro-2025-03-19",
-      "owned_by": "system",
-      "release_date": "2025-03-19"
-    },
-    {
       "id": "o3",
       "owned_by": "system",
       "release_date": "2025-04-16"
@@ -524,26 +362,6 @@
       "id": "o3-2025-04-16",
       "owned_by": "system",
       "release_date": "2025-04-16"
-    },
-    {
-      "id": "o3-deep-research",
-      "owned_by": "system",
-      "release_date": "2025-04-16"
-    },
-    {
-      "id": "o3-deep-research-2025-06-26",
-      "owned_by": "system",
-      "release_date": "2025-04-16"
-    },
-    {
-      "id": "o3-mini",
-      "owned_by": "system",
-      "release_date": "2024-12-20"
-    },
-    {
-      "id": "o3-mini-2025-01-31",
-      "owned_by": "system",
-      "release_date": "2024-12-20"
     },
     {
       "id": "o3-pro",
@@ -556,39 +374,11 @@
       "release_date": "2025-06-10"
     },
     {
-      "id": "o4-mini",
-      "owned_by": "system",
-      "release_date": "2025-04-16"
-    },
-    {
-      "id": "o4-mini-2025-04-16",
-      "owned_by": "system",
-      "release_date": "2025-04-16"
-    },
-    {
-      "id": "o4-mini-deep-research",
-      "owned_by": "system",
-      "release_date": "2025-04-16"
-    },
-    {
-      "id": "o4-mini-deep-research-2025-06-26",
-      "owned_by": "system",
-      "release_date": "2025-04-16"
-    },
-    {
       "id": "omni-moderation-2024-09-26",
       "owned_by": "system"
     },
     {
       "id": "omni-moderation-latest",
-      "owned_by": "system"
-    },
-    {
-      "id": "sora-2",
-      "owned_by": "system"
-    },
-    {
-      "id": "sora-2-pro",
       "owned_by": "system"
     },
     {
