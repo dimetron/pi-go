@@ -62,21 +62,37 @@ func mcpOAuthTokenFile(server, serverURL string) (string, error) {
 	return filepath.Join(home, ".pi-go", "mcp-oauth", name), nil
 }
 
+// readMCPOAuthRecord reads the cached token document for a server identity
+// without judging whether it is still usable, returning the file path so a
+// caller that invalidates the entry can act on the same one it read. The second
+// result is false when nothing is stored or the document does not parse.
+//
+// It is split out from loadMCPOAuthTokenSource so a caller that only needs the
+// record — `pi mcp login`, reporting whether it reused a token or minted a fresh
+// one — does not have to rebuild a token source to look at it.
+func readMCPOAuthRecord(server, serverURL string) (mcpOAuthToken, string, bool) {
+	path, err := mcpOAuthTokenFile(server, serverURL)
+	if err != nil {
+		return mcpOAuthToken{}, "", false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return mcpOAuthToken{}, path, false
+	}
+	var st mcpOAuthToken
+	if err := json.Unmarshal(data, &st); err != nil {
+		return mcpOAuthToken{}, path, false
+	}
+	return st, path, true
+}
+
 // loadMCPOAuthTokenSource returns a token source rebuilt from the cached
 // credentials for the given server identity, or nil when nothing usable is
 // stored (missing, older than mcpOAuthTokenTTL, expired with no refresh
 // token, or written for a different server URL).
 func loadMCPOAuthTokenSource(server, serverURL string) oauth2.TokenSource {
-	path, err := mcpOAuthTokenFile(server, serverURL)
-	if err != nil {
-		return nil
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-	var st mcpOAuthToken
-	if err := json.Unmarshal(data, &st); err != nil {
+	st, path, ok := readMCPOAuthRecord(server, serverURL)
+	if !ok {
 		return nil
 	}
 	if st.AccessToken == "" || time.Since(st.SavedAt) > mcpOAuthTokenTTL {

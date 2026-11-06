@@ -771,6 +771,32 @@ Or in standalone `~/.pi-go/mcp.json` (Claude Desktop compatible format):
 
 **Environment variable substitution:** Pi automatically expands `${ENV_VAR}` patterns in server URLs using `.pi-go/.env`
 
+Or manage servers from the command line instead of editing JSON:
+
+```bash
+pi mcp add superlogical --url https://www.superlogical.com/rex/community-mcp
+pi mcp login superlogical        # authorize it now, ahead of any session
+pi mcp list                      # what pi would load, with transport and auth state
+pi mcp remove superlogical
+```
+
+`pi mcp add` writes `~/.pi-go/mcp.json` (or `.pi-go/mcp.json` in the current tree
+with `--project`), in the same format other MCP clients read. Use `--command` and
+repeatable `--arg` for a stdio server, `--header key=value` for extra HTTP headers,
+and `--force` to replace an existing entry of the same name.
+
+`pi mcp login` is for remote servers that want a bearer token. It runs the OAuth
+authorization-code flow in your browser, validates the result by listing the
+server's tools, and caches the token under `~/.pi-go/mcp-oauth`. Every later
+session presents that token from the start, so an agent run never stops to ask
+for a browser — and a headless run, which cannot authorize at all, finds working
+credentials already on disk. Without a login the token is obtained on first
+connect instead, which is fine interactively and a skip otherwise.
+
+**Scope matters:** a project `.pi-go/mcp.json` *replaces* the global server list
+rather than merging with it. `pi mcp add` warns when the file it just wrote is
+shadowed by one found in the current tree; pass `--project` to add there instead.
+
 ## Editor integration
 
 Pi can run as an Agent Client Protocol (ACP) server. Use it from any IDE that supports ACP.
