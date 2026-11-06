@@ -13,12 +13,48 @@ import (
 
 // ModelInfo holds a model ID and optional metadata returned by a provider's
 // model listing API.
+//
+// Every field here is populated from the provider's own response when the
+// provider sends it. ContextWindow and MaxInputTokens are not interchangeable:
+// a provider that reports both (agentgateway, OpenAI-compatible catalog
+// entries) is describing total context and the prompt ceiling separately, and
+// the ceiling is the smaller number because the output reservation comes out of
+// the total. Compaction budgets against the ceiling, so it wins when present.
 type ModelInfo struct {
-	ID            string   `json:"id"`
-	OwnedBy       string   `json:"owned_by,omitempty"`
-	ContextWindow int64    `json:"context_window,omitempty"` // max_context_length
-	Capabilities  []string `json:"capabilities,omitempty"`   // e.g. completion_chat, vision
-	ReleaseDate   string   `json:"release_date,omitempty"`   // models.dev catalog date, when known
+	ID          string `json:"id"`
+	OwnedBy     string `json:"owned_by,omitempty"`
+	ReleaseDate string `json:"release_date,omitempty"` // models.dev catalog date, when known
+
+	// ContextWindow is total context. For providers that report a single
+	// limit (Anthropic max_input_tokens, Gemini inputTokenLimit) this and
+	// MaxInputTokens carry the same number.
+	ContextWindow int64 `json:"context_window,omitempty"`
+
+	// MaxInputTokens is the prompt ceiling, when the provider distinguishes it
+	// from total context. 0 means the provider did not say.
+	MaxInputTokens int64 `json:"max_input_tokens,omitempty"`
+
+	// MaxTokens is the output reservation.
+	MaxTokens int64 `json:"max_tokens,omitempty"`
+
+	DisplayName string `json:"display_name,omitempty"`
+	// Lifecycle is active, deprecated, or retired when the provider says so.
+	Lifecycle string `json:"lifecycle,omitempty"`
+	// RetiresAt is when a deprecated model stops answering, as the provider
+	// spells it (RFC3339, or a bare date for OpenAI's shutdown_date).
+	RetiresAt string `json:"retires_at,omitempty"`
+
+	// Capabilities is the display list rendered in the table's Notes column.
+	Capabilities []string `json:"capabilities,omitempty"`
+
+	// Structured capability flags. Pointers because a provider that omits a
+	// flag means "unknown", which is not the same as false: agentgateway drops
+	// a flag entirely when the targets of a virtual model disagree, and
+	// recording that as false would be a guess.
+	Reasoning        *bool `json:"reasoning,omitempty"`
+	ToolCall         *bool `json:"tool_call,omitempty"`
+	StructuredOutput *bool `json:"structured_output,omitempty"`
+	Temperature      *bool `json:"temperature,omitempty"`
 }
 
 // ListModelsOptions controls how models are fetched from a provider.
@@ -187,17 +223,76 @@ func listOpenRouterModels(ctx context.Context, opts ListModelsOptions) ([]ModelI
 // agentgateway. The gateway is OpenAI-compatible, so the shared bearer
 // envelope applies; the default endpoint is localhost:4000.
 //
-// The gateway's /v1/models only carries id/owned_by — no context window — so
-// each model is enriched from the embedded context-window table. That is what
-// makes `pi model list agentgateway -o json` show a real context_window for
-// the virtual models (e.g. ollama-deepseek → 1M) instead of omitting the field.
+// Since gateway v1.7.0 the response is catalog-backed: entries for models the
+// embedded catalog knows carry context_window, context_length,
+// max_input_tokens, max_tokens, name, architecture, capabilities and
+// supported_parameters. Those are read here and trusted.
+//
+// It previously read only id/owned_by and backfilled the window from
+// context-windows.json. That made a working gateway produce worse data than a
+// missing one: measured against a live v1.7.0-alpha.1, 109 of the 241 entries
+// that report a window agreed with the local table, 46 over-estimated it
+// (compaction fires past the real limit and the request overflows) and 62 were
+// blanked to 0 (compaction never fires at all). Do not reintroduce a local
+// lookup here — the gateway knows its own routes.
+//
+// Virtual models are the case that catches a well-meaning fallback: the
+// gateway reports them with owned_by "virtual" and no limits at all, because
+// its own combine() intersects the targets and refuses to advertise a limit
+// that does not hold for every one of them. A 0 window here is the correct,
+// deliberate answer, not missing data to fill in.
 func listAgentGatewayModels(ctx context.Context, opts ListModelsOptions) ([]ModelInfo, error) {
-	models, err := listBearerModels(ctx, opts, "agentgateway", "agentgateway")
-	if err != nil {
-		return nil, err
+	baseURL := opts.BaseURL
+	if baseURL == "" {
+		baseURL = providerDefaultBaseURL("agentgateway")
 	}
-	for i := range models {
-		models[i].ContextWindow = ContextWindowSizeFor("agentgateway", models[i].ID)
+	trimmed := strings.TrimRight(baseURL, "/")
+	endpoint := trimmed + "/v1/models"
+	if strings.HasSuffix(trimmed, "/v1") {
+		endpoint = trimmed + "/models"
+	}
+
+	var payload struct {
+		Data []struct {
+			ID            string `json:"id"`
+			OwnedBy       string `json:"owned_by"`
+			Name          string `json:"name"`
+			ContextWindow int64  `json:"context_window"`
+			ContextLength int64  `json:"context_length"`
+			MaxInput      int64  `json:"max_input_tokens"`
+			MaxTokens     int64  `json:"max_tokens"`
+			Capabilities  struct {
+				Reasoning        *bool `json:"reasoning"`
+				StructuredOutput *bool `json:"structured_outputs"`
+				Tools            *bool `json:"tools"`
+				Temperature      *bool `json:"temperature"`
+			} `json:"capabilities"`
+		} `json:"data"`
+	}
+	if err := fetchJSON(ctx, http.MethodGet, endpoint, opts, "agentgateway", &payload); err != nil {
+		return nil, fmt.Errorf("listing agentgateway models: %w", err)
+	}
+
+	models := make([]ModelInfo, 0, len(payload.Data))
+	for _, m := range payload.Data {
+		info := ModelInfo{
+			ID:               m.ID,
+			OwnedBy:          m.OwnedBy,
+			DisplayName:      m.Name,
+			ContextWindow:    m.ContextWindow,
+			MaxInputTokens:   m.MaxInput,
+			MaxTokens:        m.MaxTokens,
+			Reasoning:        m.Capabilities.Reasoning,
+			ToolCall:         m.Capabilities.Tools,
+			StructuredOutput: m.Capabilities.StructuredOutput,
+			Temperature:      m.Capabilities.Temperature,
+		}
+		// context_length duplicates context_window on every entry that carries
+		// both; it is the pre-v1.7 spelling and is read only as a fallback.
+		if info.ContextWindow == 0 {
+			info.ContextWindow = m.ContextLength
+		}
+		models = append(models, info)
 	}
 	return models, nil
 }
