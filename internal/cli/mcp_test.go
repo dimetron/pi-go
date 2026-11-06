@@ -14,8 +14,14 @@ import (
 // global scope is somewhere disposable, and returns its combined output.
 func runMCPCmd(t *testing.T, home string, args ...string) (string, error) {
 	t.Helper()
+	// os.UserHomeDir reads HOME on Unix and USERPROFILE on Windows; HOMEDRIVE
+	// and HOMEPATH are cleared because a set HOMEDRIVE+HOMEPATH pair takes
+	// precedence there and would point the global scope somewhere the test
+	// cannot inspect.
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
+	t.Setenv("HOMEDRIVE", "")
+	t.Setenv("HOMEPATH", "")
 
 	cmd := newMCPCmd()
 	cmd.SetArgs(args)

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -98,12 +99,20 @@ func TestWriteJSONDocument_Format(t *testing.T) {
 
 // A directory created for the file must not be world-readable: it holds server
 // URLs, which routinely carry API keys.
+//
+// Windows is skipped for the mode assertion only — it has no POSIX permission
+// bits and reports 0777 for every directory, so the check would fail there while
+// saying nothing about what the code did. The file is still written, so the rest
+// of the test runs on every platform.
 func TestWriteJSONDocument_CreatesPrivateDirectory(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), ".pi-go")
 	path := filepath.Join(dir, "mcp.json")
 
 	if err := writeJSONDocument(path, map[string]any{}); err != nil {
 		t.Fatalf("writeJSONDocument: %v", err)
+	}
+	if runtime.GOOS == "windows" {
+		return
 	}
 
 	info, err := os.Stat(dir)
