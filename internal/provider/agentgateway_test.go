@@ -149,16 +149,118 @@ func TestListAgentGatewayModels(t *testing.T) {
 	}
 }
 
-// TestListAgentGatewayModelsEnrichesContextWindow pins that the listing path
-// fills in the context window from the embedded table, since the gateway's
-// /v1/models only carries id/owned_by. This is what makes `pi model list
-// agentgateway -o json` show a real context_window for the virtual models.
-func TestListAgentGatewayModelsEnrichesContextWindow(t *testing.T) {
+// TestListAgentGatewayModelsKeepsServedContextWindow pins that the listing
+// trusts the window the gateway reports instead of overwriting it from the
+// embedded table. The two disagree here on purpose: a local lookup for
+// gpt-5.6-luna returns 272000 (a pricing-tier boundary that was mistaken for a
+// context window), while the gateway reports the real ceilings. If the
+// backfill is ever reintroduced this test fails on the first assertion.
+func TestListAgentGatewayModelsKeepsServedContextWindow(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": []map[string]any{
-				{"id": "ollama-deepseek", "owned_by": "openai"},
-				{"id": "ollama-gemma4", "owned_by": "openai"},
+				{
+					"id":               "gpt-5.6-luna",
+					"object":           "model",
+					"owned_by":         "openai",
+					"name":             "GPT-5.6 Luna",
+					"context_window":   1050000,
+					"context_length":   1050000,
+					"max_input_tokens": 922000,
+					"max_tokens":       128000,
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	models, err := listAgentGatewayModels(context.Background(), ListModelsOptions{
+		APIKey:  "agw-key",
+		BaseURL: srv.URL,
+	})
+	if err != nil {
+		t.Fatalf("listAgentGatewayModels: %v", err)
+	}
+	if len(models) != 1 {
+		t.Fatalf("got %d models, want 1", len(models))
+	}
+	m := models[0]
+	if m.ContextWindow != 1_050_000 {
+		t.Errorf("ContextWindow = %d, want 1050000 (served), not the local table's 272000", m.ContextWindow)
+	}
+	if m.MaxInputTokens != 922_000 {
+		t.Errorf("MaxInputTokens = %d, want 922000", m.MaxInputTokens)
+	}
+	if m.MaxTokens != 128_000 {
+		t.Errorf("MaxTokens = %d, want 128000", m.MaxTokens)
+	}
+	if m.DisplayName != "GPT-5.6 Luna" {
+		t.Errorf("DisplayName = %q, want %q", m.DisplayName, "GPT-5.6 Luna")
+	}
+}
+
+// TestListAgentGatewayModelsVirtualModelStaysZero pins the deliberate-absence
+// case. The gateway describes a virtual model with owned_by "virtual" and no
+// limits, because it intersects its targets and will not advertise a limit that
+// fails for one of them. pi-fast has a 1000000 entry in context-windows.json;
+// substituting it would be exactly the guess the gateway refused to make.
+func TestListAgentGatewayModelsVirtualModelStaysZero(t *testing.T) {
+	// Guard the premise: if the table stops carrying pi-fast this test no
+	// longer proves anything, because there would be nothing to wrongly
+	// substitute.
+	if table := ContextWindowSizeFor("agentgateway", "pi-fast"); table == 0 {
+		t.Skip("pi-fast is no longer in the context-window table; nothing to substitute")
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{"id": "pi-fast", "object": "model", "owned_by": "virtual"},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	models, err := listAgentGatewayModels(context.Background(), ListModelsOptions{
+		APIKey:  "agw-key",
+		BaseURL: srv.URL,
+	})
+	if err != nil {
+		t.Fatalf("listAgentGatewayModels: %v", err)
+	}
+	if len(models) != 1 {
+		t.Fatalf("got %d models, want 1", len(models))
+	}
+	if got := models[0].ContextWindow; got != 0 {
+		t.Errorf("ContextWindow = %d, want 0: the gateway reported no limit for this virtual model", got)
+	}
+	if got := models[0].OwnedBy; got != "virtual" {
+		t.Errorf("OwnedBy = %q, want %q", got, "virtual")
+	}
+}
+
+// TestListAgentGatewayModelsCapabilities pins the structured flags, including
+// the distinction between a flag the gateway omitted (unknown) and one it set
+// to false.
+func TestListAgentGatewayModelsCapabilities(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{
+					"id":       "claude-opus-5",
+					"owned_by": "anthropic",
+					"capabilities": map[string]any{
+						"reasoning":          true,
+						"structured_outputs": true,
+						"tools":              true,
+						"temperature":        false,
+					},
+				},
+				{
+					"id":       "some-unknown-model",
+					"owned_by": "custom",
+					// No capabilities block at all.
+				},
 			},
 		})
 	}))
@@ -174,13 +276,22 @@ func TestListAgentGatewayModelsEnrichesContextWindow(t *testing.T) {
 	if len(models) != 2 {
 		t.Fatalf("got %d models, want 2", len(models))
 	}
-	// ollama-deepseek routes to deepseek-v4-flash:0731-cloud (1M).
-	if got := models[0].ContextWindow; got != 1_000_000 {
-		t.Errorf("ollama-deepseek ContextWindow = %d, want 1000000", got)
+
+	known := models[0]
+	if known.Reasoning == nil || !*known.Reasoning {
+		t.Errorf("Reasoning = %v, want true", known.Reasoning)
 	}
-	// ollama-gemma4 routes to gemma4:cloud, which is not in the table → 0.
-	if got := models[1].ContextWindow; got != 0 {
-		t.Errorf("ollama-gemma4 ContextWindow = %d, want 0 (uncataloged)", got)
+	if known.Temperature == nil || *known.Temperature {
+		t.Errorf("Temperature = %v, want false", known.Temperature)
+	}
+
+	// An omitted block is unknown, not false.
+	unknown := models[1]
+	if unknown.Reasoning != nil {
+		t.Errorf("Reasoning = %v, want nil (gateway said nothing)", *unknown.Reasoning)
+	}
+	if unknown.ToolCall != nil {
+		t.Errorf("ToolCall = %v, want nil", *unknown.ToolCall)
 	}
 }
 
