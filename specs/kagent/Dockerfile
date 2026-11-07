@@ -152,12 +152,28 @@ USER pi
 
 WORKDIR /data
 
-# Everything pi keeps under ~/.pi-go — session transcripts, the memory
-# store, logs — has to land on the durable mount, or an actor that Substrate
-# checkpoints and restores elsewhere, or replaces outright, comes back with
-# no record of its conversations. HOME is the one knob all of it hangs off;
-# PI_SESSIONS_DIR alone would leave the memory store behind.
+# Everything pi keeps under ~/.pi-go — the memory store, logs — has to land
+# on the durable mount, or an actor that Substrate checkpoints and restores
+# elsewhere, or replaces outright, comes back with no record of its
+# conversations. HOME is the knob that state hangs off.
 ENV HOME=/data
+
+# HOME alone is not enough, because /data is not always ours to write.
+#
+# /data is a Substrate DurableDir volume. Snapshots taken before this image
+# switched to a non-root USER kept /data/.pi-go root-owned, and a restore
+# re-applies the modes the snapshot recorded. This process runs as 10001, so
+# every session inheriting such a snapshot fails the moment pi opens the
+# store:
+#
+#   creating session dir: mkdir /data/.pi-go/sessions/<id>: permission denied
+#
+# Sessions go under /data/sessions instead: a directory pi creates itself, on
+# the 0777 durable mount, so no inherited tree can deny it. This is the
+# documented purpose of the override -- see sessionsDir() in internal/cli,
+# which exists for "a server whose home is not durable storage". The memory
+# store stays on HOME and degrades independently.
+ENV PI_SESSIONS_DIR=/data/sessions
 COPY --from=build /out/pi /usr/local/bin/pi
 
 # A2A HTTP/gRPC port (kagent compiler sets PORT=80; readyz stays 8081).
