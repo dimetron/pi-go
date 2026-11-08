@@ -160,6 +160,13 @@ draw_chart() {
 
 models: $(cd "$here" && ls -d */ 2>/dev/null | tr -d / | tr '\n' ' ')"
 
+# Lint before checking: a model that passes for a structural reason is worse
+# than one that fails, because nobody looks at it again.
+if ! python3 "$here/lint.py" "$here" >&2; then
+    printf 'check: the models failed the structural lint above; TLC was not run\n' >&2
+    exit 2
+fi
+
 JAVA_BIN="$(find_java)" || die "no java found. Install one (brew install openjdk) or set JAVA."
 JAR="$(find_jar)" || exit $?
 
