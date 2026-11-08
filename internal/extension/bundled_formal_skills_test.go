@@ -6,7 +6,12 @@ import "testing"
 // skill silently never registers and the model it documents is unreachable from
 // an agent session.
 func TestBundledFormalVerificationSkillsRegistered(t *testing.T) {
-	want := []string{"verify-goal-loop", "verify-run-pipeline", "verify-agent-lifecycle"}
+	want := []string{
+		"verify-goal-loop",
+		"verify-run-pipeline",
+		"verify-agent-lifecycle",
+		"verify-session-flow",
+	}
 
 	skills, err := LoadBundledSkills()
 	if err != nil {
