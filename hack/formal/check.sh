@@ -92,9 +92,15 @@ run_model() {
 
     printf '\n== %s ==\n' "$name"
     local out rc
+    # -metadir keeps TLC's fingerprint and state dumps out of the repo. Without
+    # it TLC writes a multi-megabyte states/ directory beside the spec, which is
+    # untracked noise at best and a rejected commit when it gets staged.
+    local meta
+    meta="$(mktemp -d "${TMPDIR:-/tmp}/tlc-meta.XXXXXX")"
     out="$(cd "$dir" && "$JAVA_BIN" -XX:+UseParallelGC -cp "$JAR" tlc2.TLC \
-        -workers 1 -fp 0 -lncheck final -config "$cfg" "$spec" 2>&1)"
+        -workers 1 -fp 0 -lncheck final -metadir "$meta" -config "$cfg" "$spec" 2>&1)"
     rc=$?
+    rm -rf "$meta"
 
     # TLC's exit codes: 0 clean, 11/12/13 a rule broke, anything else an error.
     case "$rc" in

@@ -25,3 +25,19 @@ skill says how to tell which — never weaken a rule to make a run pass.
 New models: copy an existing directory, one step per function call, name each
 action after the function it stands for, and prove the check can fail by
 breaking the model in a scratch copy before trusting a pass.
+
+## `lint.py`
+
+Structural lint that runs before TLC. It exists because three separate defects
+produced green runs that proved nothing:
+
+- **unassigned-variable** — a variable no action assigns. TLC stops with
+  "Successor state is not completely specified" on some paths, and any rule over
+  it is vacuously true. An entire gate rule was silently vacuous this way.
+- **duplicate-assignment** — two assignments to one variable in one action. TLA+
+  conjoins them, so a contradicting branch can never fire. This hid the ordering
+  bug the `/goal` model was written to find.
+- **vacuous-rule** — a rule whose premise needs a literal no action produces.
+
+Each check was confirmed against the real defect it was written for, not a
+synthetic one.
