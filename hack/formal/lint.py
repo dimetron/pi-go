@@ -30,11 +30,14 @@ import re
 import sys
 
 VARS_RE = re.compile(r"^VARIABLES\s*$(.*?)(?=^\S)", re.S | re.M)
-ACTION_RE = re.compile(r"^([A-Z]\w*)\s*==", re.M)
+# A parameterised action (ReadVerdict(outcome) ==) is a boundary too; missing
+# it folds one action's assignments into the previous one and invents
+# duplicate-assignment findings.
+ACTION_RE = re.compile(r"^([A-Z]\w*)\s*(?:\([^)]*\))?\s*==", re.M)
 ASSIGN_RE = re.compile(r"\b(\w+)'\s*=")
 UNCHANGED_RE = re.compile(r"UNCHANGED\s+<<([^>]*)>>")
 UNCHANGED_NAME_RE = re.compile(r"UNCHANGED\s+([A-Z]\w*)\s*$", re.M)
-SET_RE = re.compile(r"^(\w+)\s*==\s*<<([^>]*)>>", re.M)
+SET_RE = re.compile(r"^(\w+)\s*==\s*<<([^>]*)>>", re.M | re.S)
 RESERVED = {"Init", "Next", "FairSpec", "Spec"}
 
 
@@ -73,11 +76,46 @@ def actions(code: str) -> dict[str, str]:
 
 
 def named_sets(code: str) -> dict[str, set[str]]:
-    """Resolve `V == <<a, b>>` so `UNCHANGED V` counts the same as the tuple."""
-    return {
-        name: set(re.findall(r"[A-Za-z_]\w*", body))
-        for name, body in SET_RE.findall(code)
-    }
+    """Resolve `V == <<a, b>>` so `UNCHANGED V` counts the same as the tuple.
+
+    Scanned with balanced brackets rather than a regex: a multi-line tuple with a
+    trailing definition on the next line makes a greedy pattern swallow it, and a
+    one-line pattern misses the tuple entirely.
+    """
+    out: dict[str, set[str]] = {}
+    for m in re.finditer(r"^(\w+)\s*==\s*<<", code, re.M):
+        i = m.end() - 2
+        depth = 0
+        while i < len(code) - 1:
+            if code[i : i + 2] == "<<":
+                depth += 1
+                i += 2
+                continue
+            if code[i : i + 2] == ">>":
+                depth -= 1
+                i += 2
+                if depth == 0:
+                    break
+                continue
+            i += 1
+        body = code[m.end() - 2 : i]
+        out[m.group(1)] = set(re.findall(r"[A-Za-z_]\w*", body))
+    return out
+
+
+def branches(body: str) -> list[str]:
+    """Split an action on TLA+ IF/ELSE so assignments in different branches are
+    not read as a contradiction. A duplicate within one branch is still a bug."""
+    lines = body.splitlines()
+    out: list[list[str]] = [[]]
+    for line in lines:
+        stripped = line.strip()
+        # THEN/ELSE start an IF branch; a leading \/ starts a disjunct, which is
+        # the other way TLA+ writes alternatives (ReadVerdict uses three).
+        if stripped.startswith("THEN") or stripped.startswith("ELSE") or stripped.startswith("\\/"):
+            out.append([])
+        out[-1].append(line)
+    return ["\n".join(b) for b in out if b]
 
 
 def lint(path: pathlib.Path) -> list[str]:
@@ -92,24 +130,40 @@ def lint(path: pathlib.Path) -> list[str]:
 
     assigned_anywhere: set[str] = set()
     for name, body in acts.items():
-        if name in RESERVED:
+        if name in RESERVED or name in sets:
+            # A named set (V == <<a, b>>) is not an action.
             continue
         # An UNCHANGED tuple lists the variables it preserves; those are not
         # assignments, so they are counted separately and never as duplicates.
         preserved = set()
         for group in UNCHANGED_RE.findall(body):
             preserved.update(re.findall(r"[A-Za-z_]\w*", group))
-        for name in UNCHANGED_NAME_RE.findall(body):
-            preserved.update(sets.get(name, set()))
-        primed = collections.Counter(
-            v for v in ASSIGN_RE.findall(body) if v not in preserved
-        )
+        for setName in UNCHANGED_NAME_RE.findall(body):
+            preserved.update(sets.get(setName, set()))
+        primed = collections.Counter(ASSIGN_RE.findall(body))
         for var, n in primed.items():
             assigned_anywhere.add(var)
-            if n > 1:
+            # An UNCHANGED tuple does not excuse an assignment. `x' = v /\ UNCHANGED
+            # <<x>>` is a conjunction that pins x twice, so either the value must be
+            # v or the action is unsatisfiable. This is how a bulk edit made every
+            # action in the session model dead while the lint stayed silent.
+            if var in preserved and "THEN" not in body and "ELSE" not in body:
                 problems.append(
-                    f"{path}:{name}: duplicate-assignment: {var} assigned {n} times "
-                    f"(TLA+ conjoins them; a contradicting branch cannot fire)"
+                    f"{path}:{name}: assigned-and-unchanged: {var} is both assigned "
+                    f"and listed in UNCHANGED (TLA+ conjoins them; the action is dead "
+                    f"or the value is forced)"
+                )
+            # A duplicate inside one branch is a real contradiction; duplicates
+            # spread across IF/ELSE branches are just alternatives.
+            worst = max(
+                (collections.Counter(ASSIGN_RE.findall(b)).get(var, 0) for b in branches(body)),
+                default=0,
+            )
+            if worst > 1:
+                problems.append(
+                    f"{path}:{name}: duplicate-assignment: {var} assigned {worst} times "
+                    f"in one branch (TLA+ conjoins them; a contradicting assignment "
+                    f"cannot fire)"
                 )
         assigned_anywhere.update(preserved)
 
