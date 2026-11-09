@@ -128,6 +128,7 @@ specs/
 | 008-adk-utils-go-review/  | research | adk-utils-go feature comparison & scored recommendations                  |
 | 009-tui-review-followups/ | readme | Deferred follow-ups from the TUI review and the PR #134 review           |
 | 010-sol-pi-efficiency-lessons/ | research+design+plan | Archive-before-reduce and unblocked fixes from the SoL-Pi harness study |
+| 011-agentpilot-evaluation/ | readme | Evaluate HKUDS AgentPilot's learned "next move" policy against `/run`'s fixed retry budget |
 
 ### memory-fixes/
 
