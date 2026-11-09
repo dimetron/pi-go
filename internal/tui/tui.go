@@ -993,8 +993,15 @@ func (m *model) handleMouseClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 	// the click as "deselect".
 	if m.hitContextClear(mouse.X, mouse.Y) {
 		m.sel = selection{}
+		// Clearing history while a turn runs empties the events the turn is
+		// still writing to: its tool calls lose their results and it keeps
+		// running with m.running already false, so nothing can cancel it. Stop
+		// the turn the way Esc does first, so the rewrite happens at a boundary
+		// and the queue is handed on. Esc and Ctrl+C remain the way to stop a
+		// turn on purpose; this click is a request to forget, not to continue.
+		cmd := m.cancelAgent()
 		m.clearConversation()
-		return m, m.setFlash("Context cleared")
+		return m, tea.Batch(cmd, m.setFlash("Context cleared"))
 	}
 	// Only the chat panel is selectable. A press on the rail or in the sidebar
 	// starts nothing — and clears any highlight, the same as a click anywhere

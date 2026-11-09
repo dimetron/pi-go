@@ -23,6 +23,20 @@ die() {
     exit 2
 }
 
+# A model whose failure is a reported bug, not a regression, declares it in a
+# file beside its config: one rule name per line, `#` comments allowed. Without
+# this, `check.sh all` is red for every run and nobody can tell a known finding
+# from a new one -- which is exactly how a broken check gets ignored.
+#
+# The rules still break, and the report still names them. The only thing a
+# declaration changes is the exit code and the word "known".
+known_rules() {
+    local dir="$1"
+    local f="$dir/known-findings.txt"
+    [ -f "$f" ] || return 0
+    sed -e 's/#.*//' -e 's/[[:space:]]//g' "$f" | grep -v '^$' || true
+}
+
 # macOS ships /usr/bin/java as a stub that exists but exits non-zero, so a
 # candidate counts only if it actually runs.
 works() {
@@ -106,9 +120,27 @@ run_model() {
     case "$rc" in
         0) : ;;
         11|12|13)
-            printf '%s\n' "$out" | grep -E '^Error: Invariant|^Error: The following|^Error: Temporal' || true
-            printf 'RESULT %s: A RULE BROKE (tlc exit %s)\n' "$name" "$rc"
-            return 1
+            local broke known new
+            broke="$(printf '%s\n' "$out" |
+                sed -n 's/^Error: Invariant \([A-Za-z0-9_]*\) is violated\.$/\1/p' |
+                sort -u)"
+            known="$(known_rules "$dir")"
+            new=""
+            while read -r rule; do
+                [ -n "$rule" ] || continue
+                printf 'BROKE %s: %s\n' "$name" "$rule"
+                if printf '%s\n' "$known" | grep -qx -- "$rule"; then
+                    printf '  known finding, declared in known-findings.txt\n'
+                else
+                    new="$new $rule"
+                fi
+            done <<< "$broke"
+            if [ -n "$new" ]; then
+                printf 'RESULT %s: A RULE BROKE, not declared as a known finding:%s\n' "$name" "$new"
+                return 1
+            fi
+            printf 'RESULT %s: known finding(s) reproduced; no new breakage\n' "$name"
+            return 0
             ;;
         *)
             printf '%s\n' "$out" | tail -25
