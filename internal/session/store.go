@@ -1319,6 +1319,17 @@ func (s *FileService) Compact(sessionID, appName, userID string, summarizer Summ
 	}
 
 	splitIdx := len(sess.events) - keepRecent
+	// Adjust the split so a FunctionCall and its FunctionResponse never end up
+	// on different sides. AutoCompact does the same at autocompact.go:115 for
+	// the same reason: providers that validate pairing (Anthropic, OpenAI
+	// Responses) reject the request, or the model hallucinates, when a call is
+	// compacted away and its result survives, or the reverse. The boundary only
+	// moves the cut toward the tail, so it can never compact less than KeepRecent
+	// was asked to keep beyond a call/result pair straddling the cut.
+	splitIdx = advanceToCleanBoundary(sess.events, splitIdx)
+	if splitIdx >= len(sess.events) {
+		return nil // Nothing left to summarize without orphaning a call.
+	}
 	toCompact := sess.events[:splitIdx]
 	toKeep := sess.events[splitIdx:]
 

@@ -16,13 +16,13 @@ hack/formal/check.sh session --chart  # also draw a statechart (pstack /statecha
 | `run` | the `/run` pipeline: two-signal merge gate, hung gates, retries | 110 | `verify-run-pipeline` |
 | `agent` | one subagent: cancel stickiness, eviction, the pool slot | 35 | `verify-agent-lifecycle` |
 | `session` | the interactive session: Ctrl+C, Esc, queued prompts, quit | 34 | `verify-session-flow` |
-| `history` | session history rewrites: mid-turn clears, compaction cuts | 35 | `verify-history-rewrite` |
+| `history` | session history rewrites: mid-turn clears, compaction cuts | 11 | `verify-history-rewrite` |
 
-`history` is the one model that **fails**: both its rules break on the shipped
-code. That is a bug report, not a broken model — `check.sh history` exits 1, and
-`check.sh all` therefore exits 1. The two findings and their shortest paths are in
-`internal/extension/bundled_skills/verify-history-rewrite/SKILL.md`. Fix the code
-and the model goes green; do not weaken the rule.
+`history` was written to report two real bugs — the context gauge's `[x]` clearing
+history mid-turn, and `/compact` cutting between a tool call and its result. Both
+are now fixed and covered by tests, so all five models are green. The rules stay, so
+a regression fails here as well as in the unit tests. See *Known findings* for what
+to do if a model legitimately has to be red.
 
 Every model runs in well under a second. Each lives in its own directory as
 `<Name>.tla` + `<Name>.cfg`, with an optional `<lowercase>.view.ts` that turns TLA+
@@ -36,6 +36,28 @@ fingerprint dumps stay out of the tree.
 
 Exit codes: `0` every rule holds, `1` a rule broke, `2` TLC or the environment
 failed. A `2` is never a verdict about the code.
+
+## Known findings
+
+A model may be red because it is *reporting a bug in the code*, not because the
+model regressed. `hack/formal/<model>/known-findings.txt` declares those rules by
+name. `check.sh` then prints the rule as a known finding and does **not** fail:
+
+```
+BROKE history: CutIsClean
+  known finding, declared in known-findings.txt
+RESULT history: known finding(s) reproduced; no new breakage
+```
+
+An **undeclared** break still fails the run, so `check.sh all` stays green while a
+finding is open and goes red the moment anything else breaks. Without this the
+suite is red for every run and nobody can tell a known bug from a new one.
+
+Delete a line when the fix lands: the rule must then go green. If it stays listed
+and keeps reproducing, the fix is not covered by the model.
+
+Nothing is declared today: every model is green. A declaration is for a finding
+that is real, reported, and not yet fixed — not for making a regression quiet.
 
 The rules each model checks, the code each step stands for, and what the model
 leaves out are documented in the matching skill under

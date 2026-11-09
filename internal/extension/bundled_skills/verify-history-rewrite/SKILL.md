@@ -13,9 +13,23 @@ is caught by a test, because a test cannot easily produce the interleaving.
 The properties: **history is only rewritten between turns**, and **a compaction
 cut never separates a tool call from its result**.
 
-**This model currently fails.** Both rules break on the shipped code. See
-[Findings](#findings) — they are bug reports, not modelling errors. Do not weaken
-either rule to make the run green.
+**This model reports two findings that were real and are now fixed.** Both rules
+broke on the shipped code when the model was written; both are green now because
+the code was changed, not because a rule was weakened. See
+[Findings](#findings) for each, the path that reached it, and the test that now
+holds it.
+
+The model was changed with the fixes: `SlashCompact` now rounds its cut and
+`GaugeClearsMidTurn` ends the turn instead of leaving it running. That is the only
+legitimate way to make a broken rule green — change the model to match the code,
+then confirm the break still reproduces. The regression check at the bottom of this
+skill is what keeps it honest.
+
+If a finding is real and *not yet* fixed, declare the rule in
+`hack/formal/history/known-findings.txt` (one rule name per line). `check.sh`
+then prints `BROKE history: <rule>` / `known finding, declared in ...` and exits
+`0`; an undeclared break still exits `1`. Remove the line when the fix lands — if
+the rule keeps reproducing, the fix is not covered by the model.
 
 ## Does my change touch the verified code
 
@@ -73,45 +87,59 @@ Both are reported with the shortest path TLC found. Replay them against the code
 before acting — the model is a claim about the code, not a substitute for reading
 it.
 
-### 1. The context gauge's `[x]` rewrites history mid-turn
+Both findings below are **fixed**. Their guards are named so a regression is
+recognisable, and each guard is held by a test as well as by this model.
+
+### 1. The context gauge's `[x]` rewrote history mid-turn — fixed
 
 **Rule:** `NoRewriteMidTurn` — history is rewritten only between turns
 (`internal/agent/agent.go:384-387`).
 
 **Path:** a turn runs → you click the context gauge's `[x]` while it works.
 
-**Why it is reachable.** `hitContextClear` (`internal/tui/context_rule.go:311-320`)
-checks only the layout row and `ShowClear`, and `ShowClear` depends on terminal
-width alone (`context_rule.go:192-197`) — it never consults `m.running`. So unlike
-`/clear`, which returns early while a turn runs (`tui.go:773`), the mouse path
-proceeds. `clearConversation` then sets `m.running = false`
-(`commands.go:299`) and calls `clearSessionContext` → `ClearEvents`, but it does
-**not** cancel `m.agentCancel` or drain `m.agentCh`. The canceled-looking turn is
-still executing and will keep appending to the events that were just emptied.
+**What went wrong.** `hitContextClear` (`context_rule.go:311-320`) checks only the
+layout row and `ShowClear`, and `ShowClear` depends on terminal width alone
+(`context_rule.go:192-197`) — it never consulted `m.running`. So unlike `/clear`,
+which returns early while a turn runs (`tui.go:773`), the mouse path proceeded.
+`clearConversation` then set `m.running = false` (`commands.go:299`) and called
+`clearSessionContext` → `ClearEvents`, without cancelling `m.agentCancel` or
+draining `m.agentCh`.
 
-**Harm:** the in-flight turn's tool calls lose their results — the exact orphaning
-the pre-turn hook placement exists to prevent. `m.running = false` also means the
-TUI no longer offers Esc, so the still-running turn cannot be stopped from the
-keyboard.
+**Harm (had it shipped):** the in-flight turn's tool calls lose their results — the
+orphaning the pre-turn hook placement exists to prevent. `m.running = false` also
+removed the keyboard path that could stop the still-running turn.
 
-### 2. `/compact` cuts between a tool call and its result
+**The guard now.** `handleMouseClick` calls `m.cancelAgent()` before
+`clearConversation` (`tui.go:994-1006`), so the click stops the turn the way Esc
+does and the rewrite lands between turns. `GaugeClearsMidTurn` ends the turn in the
+model, and it can no longer reach a mid-turn rewrite. Held by
+`TestContextGaugeClearStopsTheRunningTurnFirst`, which drives
+`handleMouseClick` rather than the helper — the missing guard *was* the bug.
+
+### 2. `/compact` cut between a tool call and its result — fixed
 
 **Rule:** `CutIsClean` — a cut never separates a `FunctionCall` from its
 `FunctionResponse` (`internal/session/autocompact.go:110-114`).
 
 **Path:** a turn runs and its tool call is answered → you run `/compact`.
 
-**Why it is reachable.** `advanceToCleanBoundary` is called from exactly one site,
-`autocompact.go:115`, on the automatic path. `FileService.Compact` instead cuts at
+**What went wrong.** `advanceToCleanBoundary` had exactly one caller,
+`autocompact.go:115`, on the automatic path. `FileService.Compact` cut at
 `splitIdx := len(sess.events) - cfg.KeepRecent` (`store.go:1322`) and never
-consults the boundary helper, so an odd split point keeps a result whose call was
-compacted. `KeepRecent` defaults to 10 (`store.go:1283`), which is an even number,
-so the shipped default rarely lands on an odd index — but the value is
-caller-supplied and `/compact` is not the only caller.
+consulted it, so an odd split point kept a result whose call was compacted.
+`KeepRecent` defaults to 10 (`store.go:1283`) — even, so the shipped default rarely
+landed on an odd index, but the value is caller-supplied and `/compact` is not its
+only caller.
 
-**Harm:** the model is sent a tool result with no matching call. Providers reject
-that outright, and ADK's own history loader drops such results, so the turn either
-fails or silently loses tool output.
+**Harm (had it shipped):** the model is sent a tool result with no matching call.
+Providers that validate pairing reject the request, and ADK's own history loader
+drops such results, so the turn either fails or silently loses tool output.
+
+**The guard now.** `Compact` calls `advanceToCleanBoundary` on its split point and
+returns early if the rounded index leaves nothing to summarize
+(`store.go:1322-1330`). `SlashCompact` rounds its cut in the model. Held by
+`TestCompactKeepsCallAndResultTogether`, which asserts the surviving tail does not
+begin with an orphaned result.
 
 ## Telling a bug from a modelling error
 
@@ -123,9 +151,10 @@ commit. If the path is reachable, it is a bug: report it and leave the rule alon
 
 ## Keeping this in step with the code
 
-- **Sync commit:** `80825c9`
-- **Confirmed against:** `80825c9` plus this model, with every line reference above
-  read at that commit.
+- **Sync commit:** `5702a08`, plus the two fixes and their tests (uncommitted at the
+  time of writing; move this forward to the commit that lands them).
+- **Confirmed against:** that tree, with every file:line citation above re-read
+  after the fixes changed `store.go:1322-1330` and `tui.go:994-1006`.
 
 Move the sync commit forward only after confirming that the verification still
 describes the code at the new commit — run it, and re-read the file:line citations
@@ -138,13 +167,15 @@ commit.
 Before trusting a green run, break each guard in a scratch copy and confirm the
 named rule fires. Both directions were confirmed when this model was written:
 
-| Break this | Rule that must fire |
+| Regress this | Rule that must fire |
 |---|---|
-| gate `GaugeClearsMidTurn` on `phase = "idle"` | `NoRewriteMidTurn` goes **green** |
-| make `SlashCompact` round the cut down to an even index | `CutIsClean` goes **green** |
+| let `GaugeClearsMidTurn` fire while `phase = "busy"` | `NoRewriteMidTurn` |
+| make `SlashCompact` cut at any index again | `CutIsClean` |
 
-Both fixed together: `11 distinct states`, all rules hold. A rule that passes
-without you having seen it fail proves nothing.
+Both were confirmed: with the code unfixed the model reported each rule; with the
+fixes in place it holds `11 distinct states`. Re-confirm the `CutIsClean` direction
+after any change to `Compact` — reverting the boundary call is a one-line
+regression that the model catches in under a second.
 
 ## Related
 
