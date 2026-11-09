@@ -83,10 +83,17 @@ Read *which* line fired when a mutation fails. It must be
 `Attempted to apply the operator to a non-boolean` means the mutant is broken and
 proves nothing.
 
-## `lint.py`
+## `hack/formal/lint`
 
 Structural lint that runs before TLC, because a green run has been wrong for
-structural reasons more often than for logical ones:
+structural reasons more often than for logical ones. It is a Go package
+(`hack/formal/lint`) with a command at `hack/formal/lint/main`, and a test per
+defect, so every check has been seen to fire on the shape it catches.
+
+```bash
+go run ./hack/formal/lint/main                  # every model
+go run ./hack/formal/lint/main hack/formal/goal # one tree
+```
 
 - **unassigned-variable** — a variable no action assigns. TLC stops with
   "Successor state is not completely specified" on some paths, and any rule over it
@@ -101,6 +108,9 @@ structural reasons more often than for logical ones:
 The lint is branch-aware: `IF/THEN/ELSE` and `\/` alternatives are separate
 branches, so an action that differs per branch is not reported. Each check was
 confirmed against the real defect it was written for, not a synthetic one.
+
+It is Go rather than a script for the reason in `AGENTS.md`: a checker whose own
+behaviour is untested is one more thing trusted without evidence.
 
 ## Adding a model
 

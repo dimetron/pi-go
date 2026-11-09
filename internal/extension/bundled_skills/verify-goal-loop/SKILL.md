@@ -107,20 +107,15 @@ completely specified`.
 makes that branch unsatisfiable, and the action silently never fires. It cost a
 false pass on the very property this model is for. Write such actions as
 disjoint alternatives (see `ResumeClose`/`ResumeStopped`/`ResumeRenew`), and
-after any edit run this audit — it lists every action that assigns one variable
-twice:
+after any edit run the lint, which reports that and three more defect classes:
 
 ```bash
-python3 - <<'PY'
-import pathlib, re, collections
-s = pathlib.Path("hack/formal/goal/GoalLoop.tla").read_text()
-for part in re.split(r"\n(?=\w+ ==)", s):
-    name = part.split("==")[0].strip()
-    if not name or name in ("Init","Next","FairSpec") or "==" not in part: continue
-    d = {k:v for k,v in collections.Counter(re.findall(r"(\w+)'\s*=", part)).items() if v>1}
-    if d: print(f"{name}: duplicate assignments {d}")
-PY
+go run ./hack/formal/lint/main hack/formal/goal
 ```
+
+`hack/formal/lint` is a Go package with a test per defect it catches
+(`hack/formal/lint/lint_test.go`), so every check has been seen to fire on the
+shape it is meant to catch.
 
 **A small state count can mean the model never ran.** An early version reported
 "all rules hold" on 16 distinct states because `SetGoalIdle` never started a

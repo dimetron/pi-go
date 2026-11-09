@@ -85,7 +85,7 @@ in `canceling` means the user is watching a spinner nothing will clear.
   the `agent_loop.go:838-841` behaviour, independently rediscovered.
 - **A dead model passes.** After adding `quitVia`, a mechanical edit put it in
   every `UNCHANGED` tuple *and* assigned it, so every quitting action was
-  unsatisfiable and the model explored 2 states. `hack/formal/lint.py` found it;
+  unsatisfiable and the model explored 2 states. `go run ./hack/formal/lint/main` found it;
   the check itself did not. Always confirm the state count is in the tens and a
   deliberate break reproduces.
 - **A rule scoped by `ctrlC > 0` was still wrong**, because `/quit` and a single

@@ -75,7 +75,7 @@ invariant violation. Always read *which* line fired: it must be
 `Error: Invariant <name> is violated`. A `TLC threw an unexpected exception` or
 `Attempted to apply the operator` is a broken mutant, and proves nothing.
 
-Also: `hack/formal/lint.py` runs first and catches unassigned variables and
+Also: `go run ./hack/formal/lint/main` runs first and catches unassigned variables and
 conjoined assignments, the two defects that produced false passes in the `/goal`
 and `/run` models.
 

@@ -52,7 +52,7 @@ hack/formal/check.sh run --chart   # also draw the statechart
 
 Current cost: 110 distinct states, well under a second. Exit `0` every rule
 holds, `1` a rule broke, `2` TLC or the environment failed (never a verdict about
-the code). The run begins with `hack/formal/lint.py`, so a structurally broken
+the code). The run begins with `go run ./hack/formal/lint/main`, so a structurally broken
 model is reported before TLC is started.
 
 ## Read a result
@@ -79,7 +79,7 @@ the new coordinator clears the verdict).
 **A rule over a variable that no action assigns is vacuously true.** The first
 version of this model never assigned `gateOutcome` — it only *tested* it — so both
 gate rules held over an empty set. A mutation that made a hung gate retry passed
-cleanly. `hack/formal/lint.py` now fails the run for an unassigned variable and
+cleanly. `go run ./hack/formal/lint/main` now fails the run for an unassigned variable and
 for a rule whose premise needs a literal no action produces; both checks were
 confirmed against this exact defect.
 

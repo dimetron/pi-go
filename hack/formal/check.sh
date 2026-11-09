@@ -200,7 +200,7 @@ models: $(cd "$here" && ls -d */ 2>/dev/null | tr -d / | tr '\n' ' ')"
 
 # Lint before checking: a model that passes for a structural reason is worse
 # than one that fails, because nobody looks at it again.
-if ! python3 "$here/lint.py" "$here" >&2; then
+if ! go run ./hack/formal/lint/main "$here" >&2; then
     printf 'check: the models failed the structural lint above; TLC was not run\n' >&2
     exit 2
 fi
