@@ -11,6 +11,7 @@ func TestBundledFormalVerificationSkillsRegistered(t *testing.T) {
 		"verify-run-pipeline",
 		"verify-agent-lifecycle",
 		"verify-session-flow",
+		"verify-history-rewrite",
 	}
 
 	skills, err := LoadBundledSkills()

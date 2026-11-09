@@ -16,6 +16,13 @@ hack/formal/check.sh session --chart  # also draw a statechart (pstack /statecha
 | `run` | the `/run` pipeline: two-signal merge gate, hung gates, retries | 110 | `verify-run-pipeline` |
 | `agent` | one subagent: cancel stickiness, eviction, the pool slot | 35 | `verify-agent-lifecycle` |
 | `session` | the interactive session: Ctrl+C, Esc, queued prompts, quit | 34 | `verify-session-flow` |
+| `history` | session history rewrites: mid-turn clears, compaction cuts | 35 | `verify-history-rewrite` |
+
+`history` is the one model that **fails**: both its rules break on the shipped
+code. That is a bug report, not a broken model — `check.sh history` exits 1, and
+`check.sh all` therefore exits 1. The two findings and their shortest paths are in
+`internal/extension/bundled_skills/verify-history-rewrite/SKILL.md`. Fix the code
+and the model goes green; do not weaken the rule.
 
 Every model runs in well under a second. Each lives in its own directory as
 `<Name>.tla` + `<Name>.cfg`, with an optional `<lowercase>.view.ts` that turns TLA+
