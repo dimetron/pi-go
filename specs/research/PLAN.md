@@ -3,16 +3,18 @@
 > Status: **implemented — all eight phases are in.** Phase 5 (`/theme`, `/model`,
 > `/timeline` pickers) landed last; Phase 2's two defects were fixed without
 > wiring the `@` popup itself, which is called out in that phase.
-> Implemented on `fix/tui-plan-findings` as three signed commits.
+> Implemented on `fix/tui-plan-findings` as a series of signed commits; see
+> `git log main..HEAD` for the current set rather than a count here, which goes
+> stale the moment another lands.
 > Written: 2026-11-09 · Plan reviewed against the code: 2026-11-09
 > Re-reviewed against the branch: 2026-11-10
 > Reference: `tmp/opencode` @ `9e9b551e3a` (2026-11-08 17:08 -0600)
 > Code baseline: `main` @ `29fdab7`
 >
 > **Every `file:line` reference below is against the baseline commit, not the
-> branch.** The branch moved ~2.9k lines under them, so a line number that no
-> longer matches is expected: search for the symbol named next to it. Line
-> references were deliberately not rewritten, because a stale number is
+> branch.** The branch has moved thousands of lines under them, so a line number
+> that no longer matches is expected: search for the symbol named next to it.
+> Line references were deliberately not rewritten, because a stale number is
 > obviously stale while a confidently wrong one is not.
 
 ## Goal
