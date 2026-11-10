@@ -190,13 +190,25 @@ var _ tool.Tool = groundingTool{}
 
 // ProcessRequest adds the built-in search, then permits it to run next to the
 // function declarations the rest of pi's tools contribute.
+//
+// The built-in search is added here rather than by delegating to
+// geminitool.GoogleSearch.ProcessRequest because ADK v2.7.1 added a model gate
+// to that method ("Google search tool is not supported for model %v") that
+// rejects any request whose Model lacks a "gemini-" prefix. The tool being
+// present already proves the provider is Gemini — GeminiGroundingTool only
+// returns it when GroundsViaGemini holds — while req.Model is frequently empty
+// here, because ADK populates it later in the flow and tests drive
+// ProcessRequest directly. Delegating would therefore reject exactly the cases
+// this type exists to serve. setTool is unexported in adk, so the append is
+// inlined; it is the whole of setTool's body.
 func (g groundingTool) ProcessRequest(ctx adkagent.Context, req *model.LLMRequest) error {
-	if err := g.GoogleSearch.ProcessRequest(ctx, req); err != nil {
-		return err
+	if req == nil {
+		return nil
 	}
 	if req.Config == nil {
 		req.Config = &genai.GenerateContentConfig{}
 	}
+	req.Config.Tools = append(req.Config.Tools, &genai.Tool{GoogleSearch: &genai.GoogleSearch{}})
 	if req.Config.ToolConfig == nil {
 		req.Config.ToolConfig = &genai.ToolConfig{}
 	}

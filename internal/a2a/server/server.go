@@ -141,8 +141,19 @@ func Serve(ctx context.Context, cfg ServeConfig) error {
 		// retryable rather than ambiguous.
 		interceptors = append(interceptors, kagent.DispatchInterceptor{})
 	}
+	// a2a-go v2.8 deprecated WithCapabilityChecks in favor of enforcing the
+	// capabilities the agent card actually advertises. Enforcing card is also
+	// the more correct of the two: a KAGENT_AGENT_CARD_JSON card is used
+	// verbatim by the handler below, so a hardcoded capability set could gate
+	// calls the advertised card does not declare (or permit ones it does not).
+	enforcer, err := a2asrv.NewAgentCardEnforcer(card)
+	if err != nil {
+		_ = ln.Close()
+		_ = readyLn.Close()
+		return fmt.Errorf("a2a serve: build agent card enforcer: %w", err)
+	}
+	interceptors = append(interceptors, enforcer)
 	handler := a2asrv.NewHandler(executor,
-		a2asrv.WithCapabilityChecks(&a2a.AgentCapabilities{Streaming: true, ExtendedAgentCard: true}),
 		a2asrv.WithExtendedAgentCard(card),
 		a2asrv.WithTaskStore(tasks),
 		a2asrv.WithLogger(logger),
@@ -522,8 +533,14 @@ func buildCard(addr string) *a2a.AgentCard {
 			Streaming:         true,
 			ExtendedAgentCard: true,
 		},
-		DefaultInputModes:  []string{"text"},
-		DefaultOutputModes: []string{"text"},
+		// Media types, not A2A "part kinds". The card is validated as a list
+		// of MIME types: a2a-go's agent card enforcer parses each entry with
+		// mime.ParseMediaType and compares it against the media type of every
+		// incoming part, where a text part is "text/plain". The bare string
+		// "text" parses as the media type "text" and matches nothing, so it
+		// rejected every SendMessage as an unsupported content type.
+		DefaultInputModes:  []string{"text/plain", "application/json"},
+		DefaultOutputModes: []string{"text/plain", "application/json"},
 		Skills: []a2a.AgentSkill{{
 			ID:          "pi-go",
 			Name:        "pi-go",
