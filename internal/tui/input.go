@@ -82,6 +82,17 @@ type InputModel struct {
 	// rendering. Zero means the dark default.
 	Palette Palette
 
+	// stash is the LIFO of parked drafts, newest last. Only the root model
+	// pushes and pops it, and always through Stash/PopStash, so the textarea and
+	// the Text mirror above cannot drift apart.
+	stash []string
+
+	// stashPopped marks a prompt that PopStash filled and nobody has edited since.
+	// Without it the stash could not be walked: popping leaves the prompt
+	// non-empty, so the next press would stash the draft it had just restored
+	// instead of reaching the one underneath. Cleared by any edit.
+	stashPopped bool
+
 	input textarea.Model
 
 	// stylePaletteKey fingerprints the palette `input`'s prompt and cursor
@@ -210,6 +221,51 @@ func (im *InputModel) SetText(text string) {
 	im.setValue(text)
 	im.input.MoveToEnd()
 	im.syncFromInput()
+}
+
+// StashCount reports how many drafts are parked.
+func (im *InputModel) StashCount() int { return len(im.stash) }
+
+// Stash parks the current draft and clears the input, reporting whether there was
+// anything to park. The stored value is the trimmed text: a draft is a prompt, and
+// trailing blank lines are not part of what the user meant to say. Interior
+// newlines are preserved verbatim, so a multi-line draft comes back intact.
+func (im *InputModel) Stash() bool {
+	text := strings.TrimSpace(im.Text)
+	if text == "" {
+		return false
+	}
+	im.stash = append(im.stash, text)
+	im.stashPopped = false
+	im.SetText("")
+	return true
+}
+
+// PopStash restores the most recently parked draft, reporting whether there was
+// one. It goes through SetText rather than assigning Text, because Text is a
+// mirror of the embedded textarea: setting the mirror alone leaves the textarea
+// holding the old buffer, and the next keystroke syncs that stale buffer back.
+func (im *InputModel) PopStash() (string, bool) {
+	if len(im.stash) == 0 {
+		return "", false
+	}
+	text := im.stash[len(im.stash)-1]
+	im.stash = im.stash[:len(im.stash)-1]
+	im.SetText(text)
+	im.stashPopped = true
+	return text, true
+}
+
+// StashRestored reports whether the current prompt came from PopStash and has not
+// been edited. The root model uses it to keep Ctrl+S popping while the user walks
+// down the stack, rather than re-stashing the draft it just handed them.
+func (im *InputModel) StashRestored() bool { return im.stashPopped }
+
+// markStashEdited clears the popped flag after the user changes the prompt.
+func (im *InputModel) markStashEdited() {
+	if im.stashPopped {
+		im.stashPopped = false
+	}
 }
 
 // ReloadSkills re-scans skill directories from disk and updates the cached list.
@@ -381,16 +437,24 @@ func isNewlineKey(key tea.Key) bool {
 // as args to /skills and omitted from the top-level list to keep it concise.
 // It is derived from slashCommandSpecs (commands.go), which is the single
 // source of truth for name, description and handler.
-var slashCommands = func() []string {
-	names := make([]string, 0, len(slashCommandSpecs))
+//
+// It is filled in init rather than by a package-level initializer expression. As
+// an initializer it formed an initialization cycle: slashCommandSpecs holds the
+// handler funcs, one handler opens a search popup, the popup gathers the slash
+// candidates, and those read slashCommands — back to slashCommandSpecs. init runs
+// after every variable is initialized, so it derives the list without adding an
+// edge to that graph.
+var slashCommands []string
+
+func init() {
+	slashCommands = make([]string, 0, len(slashCommandSpecs))
 	for _, spec := range slashCommandSpecs {
 		if spec.hidden {
 			continue
 		}
-		names = append(names, spec.name)
+		slashCommands = append(slashCommands, spec.name)
 	}
-	return names
-}()
+}
 
 // slashCommandDesc returns the description for a slash command.
 func slashCommandDesc(cmd string) string {

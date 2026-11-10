@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"image/color"
 	"os"
+	"strconv"
+	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -71,6 +73,16 @@ type Palette struct {
 	White       color.Color // deliberately outside the gauge vocabulary
 	Control     color.Color // controls that must sit outside a gauge's color vocabulary
 	Transparent color.Color
+
+	// Diff roles. The theme file declares four of them (see ThemeColors) and
+	// the /theme preview strip has always drawn them, but the Palette — the
+	// struct the renderers actually read — never carried them, so every diff
+	// line rendered in a generic accent. DiffAdded/DiffRemoved are the row
+	// backgrounds; the *Text pair carries the legible foreground on top.
+	DiffAdded       color.Color
+	DiffRemoved     color.Color
+	DiffAddedText   color.Color
+	DiffRemovedText color.Color
 }
 
 // darkPalette is the Catppuccin Mocha palette the renderers used before theming
@@ -111,6 +123,11 @@ var darkPalette = Palette{
 	White:       lipgloss.Color("#ffffff"),
 	Control:     lipgloss.Color("#ffffff"),
 	Transparent: lipgloss.Color("#00000000"),
+
+	DiffAdded:       lipgloss.Color("#1e3a29"),
+	DiffRemoved:     lipgloss.Color("#3a1e2a"),
+	DiffAddedText:   lipgloss.Color("#a6e3a1"),
+	DiffRemovedText: lipgloss.Color("#f38ba8"),
 }
 
 // lightPalette is a high-contrast light palette, chosen so every role stays
@@ -158,18 +175,116 @@ var lightPalette = Palette{
 	White:       lipgloss.Color("#ffffff"),
 	Control:     lipgloss.Color("#1c1e26"),
 	Transparent: lipgloss.Color("#00000000"),
+
+	// Diff tints chosen for a light background. The stock Catppuccin Latte
+	// tokens pair #40a02b on #e0f0e0 for 2.82:1, which fails the 4.5:1 body-text
+	// floor these rows are read at; these hold 4.53:1 and 5.95:1 and still
+	// contrast over the page background, so a diff stays legible whether the
+	// renderer tints the row or leaves it on the page.
+	DiffAdded:       lipgloss.Color("#e6f4e6"),
+	DiffRemoved:     lipgloss.Color("#fbe9ec"),
+	DiffAddedText:   lipgloss.Color("#2f7d1f"),
+	DiffRemovedText: lipgloss.Color("#b30e2f"),
 }
 
-// paletteFor resolves a Palette from a Theme. Dark themes keep the Mocha
-// palette the renderers used before theming, so existing dark output is
-// byte-for-byte unchanged; light themes get the Catppuccin Latte palette, which
-// is legible on a light terminal background. This is what makes a light theme
-// actually render instead of drawing dark-theme foregrounds on a light screen.
+// paletteFor resolves a Palette from a Theme.
+//
+// It starts from the variant's base palette and overlays every non-empty hex
+// the theme declares. The base palette decides the roles the theme file has no
+// token for — the extended hues, the surfaces, the gutters — so a theme that
+// names only the 13 semantic roles still gets a complete, coherent palette
+// rather than zero-value colors that render as terminal defaults.
+//
+// Only 13 roles are themeable because those are the roles a theme author can
+// reason about. Everything else is derived from the variant, which is why a
+// theme declaring the same `base` for dark and light still renders differently.
 func paletteFor(t Theme) Palette {
+	p := darkPalette
 	if t.ThemeType == "light" {
-		return lightPalette
+		p = lightPalette
 	}
-	return darkPalette
+	p.Valid = true
+	p.IsLight = t.ThemeType == "light"
+
+	c := t.Colors
+	// overlay assigns c only when it parses, so a malformed or absent token
+	// leaves the variant default in place instead of blanking the role.
+	overlay := func(dst *color.Color, hex string) {
+		if col, ok := parseHexColor(hex); ok {
+			*dst = col
+		}
+	}
+
+	overlay(&p.Text, c.Text)
+	overlay(&p.Primary, c.Primary)
+	overlay(&p.Tool, c.Tool)
+	overlay(&p.Success, c.Success)
+	overlay(&p.Error, c.Error)
+	overlay(&p.Warning, c.Warning)
+	overlay(&p.DiffAdded, c.DiffAdded)
+	overlay(&p.DiffRemoved, c.DiffRemoved)
+	overlay(&p.DiffAddedText, c.DiffAddedText)
+	overlay(&p.DiffRemovedText, c.DiffRemovedText)
+
+	// Roles the theme file has no token for but which must follow the ones it
+	// does name: a prompt drawn in `primary` next to a `tool` badge drawn in
+	// the default green reads as two different themes at once.
+	//
+	// `info` has no Palette role of its own, so it drives the violet accent
+	// triple — which is the role the theme file means by "info".
+	if col, ok := parseHexColor(c.Primary); ok {
+		p.Blue, p.Accent = col, col
+	}
+	if col, ok := parseHexColor(c.Info); ok {
+		p.Mauve, p.Lavender, p.Pink = col, col, col
+	}
+	if col, ok := parseHexColor(c.Tool); ok {
+		p.Teal, p.Cyan = col, col
+	}
+	if col, ok := parseHexColor(c.Secondary); ok {
+		// Secondary is the theme's quietest ink — tokyo-night's #565f89 is
+		// 2.76:1 on its own base, which is a comment color, not a body-text
+		// one. It therefore drives the rules and gutters, which are allowed to
+		// recede, and NOT Subtext/Dim/Faint, which carry text a reader has to
+		// read. Those stay on the variant's contrast-checked ladder.
+		p.Surface, p.Overlay, p.Overlay1 = col, col, col
+	}
+	if col, ok := parseHexColor(c.Success); ok {
+		p.Green = col
+	}
+	if col, ok := parseHexColor(c.Warning); ok {
+		p.Yellow, p.Peach = col, col
+	}
+	if col, ok := parseHexColor(c.Error); ok {
+		p.Red = col
+	}
+	// The page background. It is the one role an overlay would lose rather than
+	// gain: lightPalette's surface roles are derived to sit *above* it in
+	// lightness, so applying it first would leave the derived tints reading as
+	// unrelated greys.
+	overlay(&p.Background, c.Base)
+
+	return p
+}
+
+// parseHexColor parses "#rrggbb" (or "#rgb") into a color. It reports false for
+// the empty string, so paletteFor can treat an absent token as "keep the
+// variant default" rather than "set this role to black".
+func parseHexColor(hex string) (color.Color, bool) {
+	hex = strings.TrimSpace(hex)
+	hex = strings.TrimPrefix(hex, "#")
+	switch len(hex) {
+	case 3:
+		hex = string([]byte{hex[0], hex[0], hex[1], hex[1], hex[2], hex[2]})
+	case 6:
+	default:
+		return nil, false
+	}
+	v, err := strconv.ParseUint(hex, 16, 32)
+	if err != nil {
+		return nil, false
+	}
+	return lipgloss.Color(fmt.Sprintf("#%06x", v)), true
 }
 
 // paletteOrDark returns p when it is a real palette, otherwise the dark
@@ -209,6 +324,10 @@ func paletteKey(p Palette) uint64 {
 	for _, c := range []color.Color{
 		p.Text, p.Primary, p.Accent, p.Tool, p.Success, p.Error,
 		p.Warning, p.Dim, p.Faint, p.Surface, p.Background,
+		// Diff colors are here because renderKey folds this key: two themes
+		// whose chrome matches but whose diff tints differ would otherwise
+		// share a cache entry and keep the previous theme's diff rows.
+		p.DiffAdded, p.DiffRemoved, p.DiffAddedText, p.DiffRemovedText,
 	} {
 		if c == nil {
 			continue

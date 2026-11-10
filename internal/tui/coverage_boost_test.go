@@ -835,12 +835,42 @@ func TestHandleKey_BranchPopup_OtherKey(t *testing.T) {
 	}
 }
 
+// TestHandleKey_CtrlO_ToggleTools pins the three-state cycle. Ctrl+O used to flip
+// a boolean, which could not express "fold exploration but show every edit": the
+// two questions were welded together, so the only way to see a full edit card was
+// to expand every read too.
 func TestHandleKey_CtrlO_ToggleTools(t *testing.T) {
 	m := newTestModelFull(t)
-	orig := m.chatModel.ToolDisplay.CompactTools
-	_, _ = m.handleKey(tea.KeyPressMsg(tea.Key{Code: 'o', Mod: tea.ModCtrl}))
-	if m.chatModel.ToolDisplay.CompactTools == orig {
-		t.Error("expected CompactTools toggled")
+	if got := m.chatModel.ToolDisplay.Verbosity; got != VerbositySmart {
+		t.Fatalf("default verbosity = %v, want smart", got)
+	}
+	ctrlO := tea.KeyPressMsg(tea.Key{Code: 'o', Mod: tea.ModCtrl})
+
+	// smart -> expanded: everything in full.
+	_, _ = m.handleKey(ctrlO)
+	if got := m.chatModel.ToolDisplay.Verbosity; got != VerbosityExpanded {
+		t.Fatalf("after one Ctrl+O verbosity = %v, want expanded", got)
+	}
+	if m.chatModel.ToolDisplay.CompactTools {
+		t.Error("expanded mode must not force compact cards")
+	}
+
+	// expanded -> compact: every card one-lined.
+	_, _ = m.handleKey(ctrlO)
+	if got := m.chatModel.ToolDisplay.Verbosity; got != VerbosityCompact {
+		t.Fatalf("after two Ctrl+O verbosity = %v, want compact", got)
+	}
+	if !m.chatModel.ToolDisplay.CompactTools {
+		t.Error("compact mode must set CompactTools")
+	}
+
+	// compact -> smart: back to the default, where only exploration folds.
+	_, _ = m.handleKey(ctrlO)
+	if got := m.chatModel.ToolDisplay.Verbosity; got != VerbositySmart {
+		t.Fatalf("after three Ctrl+O verbosity = %v, want smart", got)
+	}
+	if m.chatModel.ToolDisplay.CompactTools {
+		t.Error("smart mode must not force compact cards")
 	}
 }
 

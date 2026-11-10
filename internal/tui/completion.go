@@ -3,6 +3,7 @@ package tui
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -370,7 +371,28 @@ func findMentionAtCursor(text string, cursorPos int) (start int, prefix string) 
 	return -1, ""
 }
 
-// extractMentions finds all @path mentions in text and returns their paths.
+// mentionLineRangeSuffix matches a trailing `#L10` or `#L10-20` on a mention.
+// Both the L form and a bare `#10-20` are accepted, because people paste GitHub
+// permalink fragments in both shapes.
+var mentionLineRangeSuffix = regexp.MustCompile(`#L?(\d+)(?:-L?(\d+))?$`)
+
+// splitMentionLineRange separates a path from its trailing line range.
+//
+// `@main.go#L10-20` is a natural way to point at a slice of a file, and the
+// mention syntax accepts it — but extractMentions splits only on whitespace, so
+// the whole string used to travel as the *filename*. submit then emitted
+// `[Referenced file: main.go#L10-20]`, and the agent was asked to read a file
+// that does not exist. Splitting at extraction time is what keeps the range from
+// being smuggled into the path.
+func splitMentionLineRange(mention string) (path, lineRange string) {
+	if loc := mentionLineRangeSuffix.FindStringIndex(mention); loc != nil && loc[0] > 0 {
+		return mention[:loc[0]], mention[loc[0]:]
+	}
+	return mention, ""
+}
+
+// extractMentions finds all @path mentions in text and returns their paths, with
+// any `#L10-20` line-range suffix removed.
 func extractMentions(text string) []string {
 	var mentions []string
 	for i := 0; i < len(text); i++ {
@@ -383,7 +405,9 @@ func extractMentions(text string) []string {
 			j++
 		}
 		if j > i+1 {
-			mentions = append(mentions, text[i+1:j])
+			if path, _ := splitMentionLineRange(text[i+1 : j]); path != "" {
+				mentions = append(mentions, path)
+			}
 		}
 		i = j - 1
 	}

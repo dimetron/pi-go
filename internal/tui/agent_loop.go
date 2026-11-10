@@ -843,6 +843,9 @@ func (m *model) cancelAgent() tea.Cmd {
 		m.publishGoalState()
 	}
 	m.running = false
+	// The turn is over, so a pending Esc confirmation no longer refers to
+	// anything. Leaving it armed would let one press interrupt the next turn.
+	m.escArmedUntil = time.Time{}
 	m.steering = false
 	m.statusModel.ActiveTool = ""
 	m.statusModel.ActiveTools = nil
@@ -2013,6 +2016,9 @@ func (m *model) handleAgentSubEvent(msg agentSubEventMsg) (tea.Model, tea.Cmd) {
 func (m *model) handleAgentDone(msg agentDoneMsg) (tea.Model, tea.Cmd) {
 	m.invalidatePlanPhases()
 	m.running = false
+	// The turn ended on its own. A first Esc pressed just before it finished must
+	// not stay armed and interrupt whatever the user starts next.
+	m.escArmedUntil = time.Time{}
 	m.agentCancel = nil
 	m.matrix.clear()
 	m.statusModel.ActiveTool = ""

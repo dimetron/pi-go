@@ -725,3 +725,97 @@ func TestRenderSidebar_VersionHiddenWhenUnset(t *testing.T) {
 		t.Errorf("version line rendered with no AppVersion:\n%s", result)
 	}
 }
+
+// fullSidebarInput populates every section so a fold has something to fold. A
+// fixture with only the always-on sections proves nothing: the sections that used
+// to vanish were the ones a short panel had no room for.
+func fullSidebarInput(height int) SidebarRenderInput {
+	var mcp []extension.MCPToolEntry
+	for _, srv := range []string{"github", "linear", "sentry"} {
+		for i := 0; i < 3; i++ {
+			mcp = append(mcp, extension.MCPToolEntry{Server: srv, Tool: "tool"})
+		}
+	}
+	return SidebarRenderInput{
+		Width:        23,
+		Height:       height,
+		Eyes:         "(o o)",
+		GitBranch:    "main",
+		Mode:         "chat",
+		Skills:       []extension.Skill{{Name: "disk-check"}, {Name: "memory-index"}, {Name: "swarm"}},
+		MCPTools:     mcp,
+		A2AAgents:    []A2AAgentEntry{{Name: "istio-agent"}, {Name: "kagent"}},
+		MemoryStatus: &palace.PalaceStatus{DrawerCount: 42, RoomCount: 7},
+		LoadingItems: map[string]bool{"lsp": true, "memory": true},
+	}
+}
+
+// TestSidebarFoldKeepsEveryHeading is the guard for the silent-clip bug: on a
+// short terminal sidebarFrame sliced contentLines[:targetH], so the sections at
+// the bottom simply disappeared with nothing on screen saying more existed. A
+// heading is the fact that a section has state; losing it loses information, and
+// losing it silently is what made the panel lie.
+func TestSidebarFoldKeepsEveryHeading(t *testing.T) {
+	headings := []string{"Skills", "MCP Tools", "A2A Agents", "Memory", "Loading"}
+
+	// Every heading must be present at every height, folded or not.
+	for _, h := range []int{45, 34, 30, 24, 20} {
+		out := ansi.Strip(RenderSidebar(fullSidebarInput(h)))
+		for _, want := range headings {
+			if !strings.Contains(out, want) {
+				t.Errorf("height %d: section %q vanished from the panel:\n%s", h, want, out)
+			}
+		}
+		// And the panel must be exactly the height it was asked for.
+		if got := len(strings.Split(out, "\n")); got != h {
+			t.Errorf("height %d: panel rendered %d rows", h, got)
+		}
+	}
+}
+
+// TestSidebarFoldReportsWhatItHid pins the marker: a folded section must say how
+// many rows it dropped, so a reader can tell it apart from a section that simply
+// has nothing to report.
+func TestSidebarFoldReportsWhatItHid(t *testing.T) {
+	tall := ansi.Strip(RenderSidebar(fullSidebarInput(45)))
+	short := ansi.Strip(RenderSidebar(fullSidebarInput(20)))
+
+	if !strings.Contains(short, "+") {
+		t.Fatalf("short panel folded nothing, so this test proves nothing:\n%s", short)
+	}
+	// The MCP section has three servers; folding it must say so.
+	if !strings.Contains(short, "MCP Tools [9]") {
+		t.Errorf("MCP heading lost its count when folded:\n%s", short)
+	}
+	if strings.Count(short, "+") == 0 {
+		t.Errorf("no fold markers on a panel that must have folded:\n%s", short)
+	}
+	// The tall panel has room for everything, so it must not carry a fold marker.
+	for _, h := range []string{"Skills [3]", "MCP Tools [9]", "A2A Agents [2]"} {
+		if !strings.Contains(tall, h) {
+			t.Errorf("tall panel missing %q:\n%s", h, tall)
+		}
+	}
+	if strings.Contains(tall, "+1") || strings.Contains(tall, "+2") || strings.Contains(tall, "+3") {
+		t.Errorf("tall panel folded despite having room:\n%s", tall)
+	}
+}
+
+// TestSidebarFoldWidths checks I1 on folded rows. A fold appends a styled marker to
+// an already-styled heading, which is exactly the shape that produces a row wider
+// than the panel when the reset is missing.
+func TestSidebarFoldWidths(t *testing.T) {
+	for _, h := range []int{45, 30, 24, 20} {
+		for _, w := range []int{23, 30} {
+			in := fullSidebarInput(h)
+			in.Width = w
+			out := RenderSidebar(in)
+			for i, line := range strings.Split(out, "\n") {
+				if got := ansi.StringWidth(line); got != w {
+					t.Fatalf("w=%d h=%d row %d width = %d, want %d\n%q",
+						w, h, i, got, w, ansi.Strip(line))
+				}
+			}
+		}
+	}
+}

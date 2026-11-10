@@ -152,9 +152,19 @@ func kindOf(msg *message) blockKind {
 	return blockNone
 }
 
+// toolBlockKind classifies a tool by what it does to the repo, which is what the
+// rail's color vocabulary means: cool means inspection, warm means mutation.
+//
+// The names here are the names tools *register* under, not the names a reader
+// would use. The search tool is the case that bites: newGrepTool names itself
+// "ripgrep" whenever rg is installed (internal/tools/grep.go), which is the
+// common host, so listing only "grep" classified every real search as an opaque
+// blockTool. It then got the neutral grey rail cell instead of the read color,
+// and any caller keying "is this inspection?" on blockRead excluded it. Both
+// spellings are listed for exactly that reason.
 func toolBlockKind(tool string) blockKind {
 	switch tool {
-	case "read", "ls", "tree", "grep", "find", "glob":
+	case "read", "ls", "tree", "grep", "ripgrep", "find", "glob":
 		return blockRead
 	case "edit", "write":
 		return blockEdit

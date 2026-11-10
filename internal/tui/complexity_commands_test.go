@@ -88,7 +88,7 @@ func TestCplxSlashCommandSpecs_CoverExpectedSet(t *testing.T) {
 		"/pr-autofix",
 		"/retry",
 		"/goal",
-		"/skills", "/skill-list", "/skill-load", "/skill-create", "/theme", "/ping",
+		"/skills", "/skill-list", "/skill-load", "/skill-create", "/theme", "/timeline", "/ping",
 		"/model-price-refresh",
 		"/rtk", "/mcp", "/exit", "/quit",
 	}
@@ -122,7 +122,7 @@ func TestCplxSlashCommands_DerivedOrder(t *testing.T) {
 		// After /run, so "/r" still completes to /run.
 		"/retry",
 		"/goal",
-		"/skills", "/theme", "/ping", "/model-price-refresh", "/rtk", "/mcp", "/exit", "/quit",
+		"/skills", "/theme", "/timeline", "/ping", "/model-price-refresh", "/rtk", "/mcp", "/exit", "/quit",
 	}
 	if len(slashCommands) != len(want) {
 		t.Fatalf("slashCommands = %v (%d), want %d entries", slashCommands, len(slashCommands), len(want))

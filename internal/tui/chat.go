@@ -196,7 +196,7 @@ func fnvInt(h uint64, v int) uint64 {
 // (and re-syntax-highlighted) the entire scrollback, several times a second.
 // Keying on the inputs gets the same safety without the cost: a mutated message
 // simply gets a different key and re-renders.
-func (m *message) renderKey(width int, compactTools, hasSeparator, streamingPlaceholder bool, themeKey uint64, blinkOn bool) uint64 {
+func (m *message) renderKey(width int, compactTools, hasSeparator, streamingPlaceholder bool, themeKey uint64, blinkOn bool, verbosity ToolVerbosity) uint64 {
 	h := fnvOffset64
 	h = fnvStr(h, m.role)
 	h = fnvStr(h, m.content)
@@ -252,7 +252,13 @@ func (m *message) renderKey(width int, compactTools, hasSeparator, streamingPlac
 	if m.isNotice {
 		flags |= 1 << 8
 	}
-	return fnvInt(h, int(flags))
+	h = fnvInt(h, int(flags))
+	// Verbosity changes what a card renders even where CompactTools does not: Smart
+	// folds an exploration run and collapses a finished thinking block, Expanded does
+	// neither. Without it in the key a mode change replays the previous mode's cached
+	// bytes — an alternating-mode test caught exactly that, seeing the render "stay
+	// collapsed" in expanded view.
+	return fnvInt(h, int(verbosity))
 }
 
 // toolPending reports whether a tool card is still waiting on a result, and so
@@ -743,12 +749,30 @@ func (c *ChatModel) RenderMessages(running bool) string {
 // lines it opened, and collapseBlankLines then drops entries from both together,
 // so kinds[i] always describes the i-th line of the returned string.
 func (c *ChatModel) renderMessages(running bool) (string, []blockKind) {
+	text, kinds, _ := c.renderMessagesWithOffsets(running)
+	return text, kinds
+}
+
+// renderMessagesWithOffsets renders the chat and also reports where each message
+// starts, so a jump to "message 12" can be turned into a scroll offset.
+//
+// offsets has len(Messages)+1 entries: offsets[i] is the first line of message i
+// in the returned string, and the final entry is one past the last line. It is
+// the last message's end rather than a copy of its start, which is what lets a
+// caller compute a height by subtraction without special-casing the tail.
+//
+// A folded exploration run or a collapsed thinking block still claims every
+// message it covers: the run's lines are attributed to the first message of the
+// run and the rest map to that same start line. Pointing a later member of the
+// group at its own (unrendered) line would scroll the user into the middle of
+// the group's single row or past the end.
+func (c *ChatModel) renderMessagesWithOffsets(running bool) (string, []blockKind, []int) {
 	p := paletteOrDark(c.Palette)
 	themeKey := paletteKey(p)
 
 	if len(c.Messages) == 0 {
 		welcome := c.renderWelcome(p)
-		return welcome, make([]blockKind, strings.Count(welcome, "\n")+1)
+		return welcome, make([]blockKind, strings.Count(welcome, "\n")+1), []int{0}
 	}
 
 	dim := lipgloss.NewStyle().Foreground(p.Dim)
@@ -761,21 +785,52 @@ func (c *ChatModel) renderMessages(running bool) (string, []blockKind) {
 
 	var b strings.Builder
 	var kinds []blockKind
+	offsets := make([]int, len(c.Messages)+1)
+	// Line count emitted so far, kept separately from strings.Count(b.String())
+	// because that would make this quadratic over a long conversation.
+	lineCount := 0
 	lastIdx := len(c.Messages) - 1
-	for i := range c.Messages {
+	for i := 0; i < len(c.Messages); {
+		offsets[i] = lineCount
 		msg := &c.Messages[i]
 
+		// A contiguous run of finished, error-free exploration folds into one
+		// line in VerbositySmart. Grouping is cross-message, so it lives here in
+		// the loop rather than in message.renderKey, which can only see one
+		// message. The run stops at anything that is not a completed read-only
+		// tool: an edit, a bash call, an error, or a card still waiting on its
+		// result, so live progress and mutations are never hidden.
+		if run := c.explorationRun(i, running); len(run) > 1 {
+			rendered := c.renderExplorationGroup(run, p, dim)
+			b.WriteString(rendered)
+			// Append to the running slice, not to a fresh one: the kinds recorded for
+			// the messages before this group must survive, or the minimap loses its
+			// place in the conversation.
+			kinds = appendKind(kinds, blockRead, strings.Count(rendered, "\n")+1)
+			lineCount += strings.Count(rendered, "\n") + 1
+			for j := 1; j < len(run); j++ {
+				// Every member of the folded run points at the single row the
+				// group rendered, not at a line that does not exist.
+				offsets[i+j] = offsets[i]
+			}
+			i += len(run)
+			continue
+		}
+
 		isLastAndStreaming := running && i == lastIdx
-		key := msg.renderKey(c.Width, c.ToolDisplay.CompactTools, i > 0, isLastAndStreaming, themeKey, c.ToolDisplay.BlinkOn)
+		key := msg.renderKey(c.Width, c.ToolDisplay.CompactTools, i > 0, isLastAndStreaming, themeKey, c.ToolDisplay.BlinkOn, c.ToolDisplay.Verbosity)
 		if msg.renderCached && msg.renderCacheKey == key {
 			b.WriteString(msg.renderCache)
 			kinds = appendKind(kinds, kindOf(msg), strings.Count(msg.renderCache, "\n"))
+			lineCount += strings.Count(msg.renderCache, "\n")
+			i++
 			continue
 		}
 
 		rendered := c.renderMessageBlock(msg, p, bullet, separator, i > 0, isLastAndStreaming)
 		b.WriteString(rendered)
 		kinds = appendKind(kinds, kindOf(msg), strings.Count(rendered, "\n"))
+		lineCount += strings.Count(rendered, "\n")
 
 		// Cache unconditionally: correctness comes from the key, not from
 		// guessing which messages are still in flux. The streaming message
@@ -783,13 +838,30 @@ func (c *ChatModel) renderMessages(running bool) (string, []blockKind) {
 		msg.renderCache = rendered
 		msg.renderCacheKey = key
 		msg.renderCached = true
+		i++
 	}
 
 	// Subagent blocks, assistant markdown, and tool transitions each emit
 	// their own surrounding "\n", and they compound to runs of 2-3 blank
 	// lines between blocks — visually noisy when several subagents run in
+	//
+	// The sentinel is the line count before the collapse. lineCount has been
+	// accumulating newlines, and a text of N newlines has N+1 lines, so the
+	// one-past-the-end index is lineCount+1 — which is also exactly the last
+	// entry collapseBlankLinesMapped emits.
+	offsets[len(c.Messages)] = lineCount + 1
+
 	// parallel. Collapse to at most one blank line between content.
-	return collapseBlankLines(b.String(), kinds)
+	text, kinds, lineMap := collapseBlankLinesMapped(b.String(), kinds)
+	// Carry each message start across the collapse with the map, so a jump lands
+	// on the message rather than near where it used to be.
+	for i := range offsets {
+		if offsets[i] >= len(lineMap) {
+			offsets[i] = len(lineMap) - 1
+		}
+		offsets[i] = lineMap[offsets[i]]
+	}
+	return text, kinds, offsets
 }
 
 // renderWrapWidth returns the width available to content indented by reserve
@@ -846,10 +918,47 @@ func (c *ChatModel) renderUserBlock(content string, p Palette, separator string,
 // most recent lines are kept, to stay compact.
 const maxThinkingLines = 6
 
+// collapsedThinkingBody renders a finished thinking block as a single dimmed
+// header: "  ▸ Thought · <first heading or 60-char summary> (N lines)".
+//
+// The content is worth a row in the transcript — it records that the model reasoned,
+// and roughly about what — but six lines of finished reasoning per turn is noise
+// next to the answer it produced. The summary is the first non-blank line, cut at 60
+// columns, so a thinking block that begins with a heading keeps the heading.
+func collapsedThinkingBody(content string, p Palette) string {
+	lines := strings.Split(content, "\n")
+	summary := ""
+	for _, line := range lines {
+		if s := strings.TrimSpace(line); s != "" {
+			summary = truncateRunes(s, 60)
+			break
+		}
+	}
+	if summary == "" {
+		summary = "(no content)"
+	}
+	// Count only the lines that carry text; blank separators would inflate the count
+	// without adding anything the reader could go back to.
+	n := 0
+	for _, line := range lines {
+		if strings.TrimSpace(line) != "" {
+			n++
+		}
+	}
+	dim := lipgloss.NewStyle().Foreground(p.Faint)
+	return dim.Render(fmt.Sprintf("  ▸ Thought · %s (%s)", summary, plural(n, "line", "lines")))
+}
+
 // renderThinkingBlock renders the 💭 block for the model's reasoning.
 func (c *ChatModel) renderThinkingBlock(content string, p Palette) string {
 	if content == "" {
 		return ""
+	}
+	// In Smart and Compact, a thinking block the model has moved past collapses to
+	// its summary. ChatModel.Thinking being empty is how the agent loop marks the
+	// block finished, so a live block still streams its lines.
+	if c.ToolDisplay.Verbosity != VerbosityExpanded && c.Thinking == "" {
+		return "\n" + collapsedThinkingBody(content, p) + "\n"
 	}
 	thinkStyle := lipgloss.NewStyle().Foreground(p.Faint).Italic(true)
 	thinkBullet := lipgloss.NewStyle().Foreground(p.Faint).Render("💭 ")
@@ -975,8 +1084,21 @@ func appendKind(kinds []blockKind, kind blockKind, n int) []blockKind {
 // A nil or short kinds is padded, so callers that only want the text can pass
 // nil and ignore the second result.
 func collapseBlankLines(s string, kinds []blockKind) (string, []blockKind) {
+	text, k, _ := collapseBlankLinesMapped(s, kinds)
+	return text, k
+}
+
+// collapseBlankLinesMapped is collapseBlankLines plus the line mapping callers
+// need to address a line by its pre-collapse index.
+//
+// lineMap has len(lines)+1 entries: lineMap[i] is where pre-collapse line i
+// landed. Entries for dropped lines point at the line that replaced them, and
+// the final entry is len(out), so a caller that holds an offset into the
+// uncollapsed text can carry it across exactly rather than by guessing how many
+// lines went away.
+func collapseBlankLinesMapped(s string, kinds []blockKind) (string, []blockKind, []int) {
 	if s == "" {
-		return s, nil
+		return s, nil, []int{0}
 	}
 	lines := strings.Split(s, "\n")
 
@@ -988,22 +1110,32 @@ func collapseBlankLines(s string, kinds []blockKind) (string, []blockKind) {
 
 	out := make([]string, 0, len(lines))
 	outKinds := make([]blockKind, 0, len(lines))
+	lineMap := make([]int, len(lines)+1)
 	prevBlank := false
 	for i, line := range lines {
 		if blankFast(line) {
 			if prevBlank {
+				// Dropped: it addresses the previous surviving line, so a jump to
+				// a collapsed blank line lands on the content just above it.
+				lineMap[i] = len(out) - 1
+				if lineMap[i] < 0 {
+					lineMap[i] = 0
+				}
 				continue
 			}
 			prevBlank = true
+			lineMap[i] = len(out)
 			out = append(out, "")
 			outKinds = append(outKinds, blockNone)
 			continue
 		}
 		prevBlank = false
+		lineMap[i] = len(out)
 		out = append(out, line)
 		outKinds = append(outKinds, kinds[i])
 	}
-	return strings.Join(out, "\n"), outKinds
+	lineMap[len(lines)] = len(out)
+	return strings.Join(out, "\n"), outKinds, lineMap
 }
 
 // countByRole counts messages with the given role.
@@ -1027,4 +1159,96 @@ func formatTokenCount(n int64) string {
 	default:
 		return fmt.Sprintf("%d", n)
 	}
+}
+
+// explorationRun returns the contiguous run of foldable exploration messages
+// starting at i, or nil when the run is not worth folding.
+//
+// A message is foldable when it is a completed, error-free tool whose block kind is
+// blockRead. Completion is msg.toolPending() == false rather than a `done` field,
+// which does not exist; error-freedom is isFailedToolResult on the result body,
+// because the chat model does not carry a separate error flag for tool cards.
+//
+// The run stops at the first message that is not foldable, so an edit, a bash call,
+// a failure or a pending card always ends the fold and renders in full.
+func (c *ChatModel) explorationRun(i int, running bool) []int {
+	if c.ToolDisplay.Verbosity != VerbositySmart {
+		return nil
+	}
+	var run []int
+	lastIdx := len(c.Messages) - 1
+	for j := i; j < len(c.Messages); j++ {
+		msg := &c.Messages[j]
+		if !c.foldableExploration(msg, j == lastIdx && running) {
+			break
+		}
+		run = append(run, j)
+	}
+	if len(run) < 2 {
+		// A single card is cheaper to read in full than as a summary plus a count.
+		return nil
+	}
+	return run
+}
+
+// foldableExploration reports whether one message is a completed, error-free
+// read-only tool card.
+func (c *ChatModel) foldableExploration(msg *message, isLastAndStreaming bool) bool {
+	if msg.role != "tool" || msg.tool == "" {
+		return false
+	}
+	// A card still waiting on its result is live progress; folding it would hide
+	// the only sign that the agent is doing something.
+	if msg.toolPending() || (isLastAndStreaming && msg.content == "") {
+		return false
+	}
+	if msg.isError || isFailedToolResult(msg.content) {
+		return false
+	}
+	return toolBlockKind(msg.tool) == blockRead
+}
+
+// renderExplorationGroup renders a folded run as one summary line plus its rail
+// kinds.
+//
+// The rail kinds matter: the minimap is built from the per-line classification of
+// the whole transcript, so a group that replaced N cards must still contribute N
+// cards' worth of blockRead lines. Otherwise the strip would shrink and the thumb
+// would point at a different place in the conversation than it did a frame ago.
+func (c *ChatModel) renderExplorationGroup(run []int, p Palette, dim lipgloss.Style) string {
+	reads, searches, others := 0, 0, 0
+	for _, idx := range run {
+		switch c.Messages[idx].tool {
+		case "read":
+			reads++
+		case "grep", "ripgrep":
+			searches++
+		default: // find, ls, tree, glob
+			others++
+		}
+	}
+
+	var parts []string
+	if reads > 0 {
+		parts = append(parts, plural(reads, "read", "reads"))
+	}
+	if searches > 0 {
+		parts = append(parts, plural(searches, "search", "searches"))
+	}
+	if others > 0 {
+		parts = append(parts, fmt.Sprintf("%d listed", others))
+	}
+	summary := strings.Join(parts, ", ")
+
+	line := "\n" + dim.Render("  ▸ Explored · "+summary+"  ") +
+		dim.Render("(ctrl+o to expand)")
+	return line
+}
+
+// plural renders n with the singular or plural noun.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return fmt.Sprintf("%d %s", n, many)
 }

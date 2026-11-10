@@ -1,13 +1,21 @@
 # Plan: TUI Improvements Inspired by OpenCode (`tmp/opencode`)
 
-> Status: **plan — Phases 1, 3, 4, 6, 7 and 8 implemented; two Phase 2 defects
-> fixed. Phase 5 (`/theme`, `/model`, `/timeline` pickers) unstarted.**
-> Implemented on `fix/tui-plan-findings`. See "Delivered so far" at the end.
-> Nothing is committed yet: `git commit -S` fails in this environment
-> (1Password's SSH agent refuses to sign), so the branch holds staged work.
+> Status: **implemented — all eight phases are in.** Phase 5 (`/theme`, `/model`,
+> `/timeline` pickers) landed last; Phase 2's two defects were fixed without
+> wiring the `@` popup itself, which is called out in that phase.
+> Implemented on `fix/tui-plan-findings` as a series of signed commits; see
+> `git log main..HEAD` for the current set rather than a count here, which goes
+> stale the moment another lands.
 > Written: 2026-11-09 · Plan reviewed against the code: 2026-11-09
+> Re-reviewed against the branch: 2026-11-10
 > Reference: `tmp/opencode` @ `9e9b551e3a` (2026-11-08 17:08 -0600)
 > Code baseline: `main` @ `29fdab7`
+>
+> **Every `file:line` reference below is against the baseline commit, not the
+> branch.** The branch has moved thousands of lines under them, so a line number
+> that no longer matches is expected: search for the symbol named next to it.
+> Line references were deliberately not rewritten, because a stale number is
+> obviously stale while a confidently wrong one is not.
 
 ## Goal
 
@@ -41,12 +49,15 @@ wasted a cycle, so each is recorded here rather than quietly fixed:
 | `.agents/skills/tui-render-design/SKILL.md` is the authority | Both `.agents/` and `.claude/` are **gitignored** (`.gitignore:46`, `~/.gitignore:13`). The invariants live on one machine; CI cannot read them. |
 | Skill says the subagent window is 7 lines | It is `3` (`tool_display.go:459`), deliberately shrunk from 7 in `b98515f`. |
 
-Two other things the review found, unrelated to this plan but worth fixing
-before it is executed. `truncateRunes(s, n)` with `n < 3` panics (`r[:n-3]`);
-this is currently unreachable because `argWidth()` floors at 60, so it is
-latent rather than live. And `specs/research/` has no `README.md` index of its
-own — the research table lives in `specs/AGENTS.md`, which is where this plan is
-now listed.
+Two other things the review found, unrelated to this plan. The first is now
+fixed; the second is not.
+
+- ✅ `truncateRunes(s, n)` with `n < 3` panicked (`r[:n-3]`). It was latent
+  rather than live because `argWidth()` floors at 60, but it is a panic in a
+  renderer and it is now guarded (`tool_display.go:631`), with
+  `TestTruncateRunes_SmallBound`.
+- ⬜ `specs/research/` still has no `README.md` index of its own — the research
+  table lives in `specs/AGENTS.md`, which is where this plan is listed.
 
 ---
 
@@ -62,10 +73,17 @@ now listed.
 
 ### Mandatory non-regression invariants
 
-These are enforced by `internal/tui/render_integrity_test.go`. The prose version
-lives in `.agents/skills/tui-render-design/SKILL.md`, which is **gitignored** —
-treat the test as the authority, because that is what CI and every other clone
-can see.
+These are *not* all enforced by one file, which an earlier revision of this plan
+claimed. The prose version lives in `.agents/skills/tui-render-design/SKILL.md`,
+which is **gitignored** — it is not in a worktree and not in CI, so treat the
+tests as the authority. Checked per invariant:
+
+| Invariant | Enforced by |
+|---|---|
+| I1 (width) | `render_integrity_test.go` — `TestFrameIntegrityOnRealContent`, `TestChatOutputCannotTakeTheSidebarsColumns`, `TestExplorationFoldKeepsFrameIntegrity` |
+| I2 (one rail) | `minimap_test.go` — `TestRailIsContinuousAndSingleColumn`, `TestSidebarDrawsNoBorder` |
+| I5 (symmetric gaps) | `minimap_test.go` — `TestMessageBlockGapsAreSymmetric` |
+| I3, I4 | **no dedicated test.** Reviewed by eye; a regression shows up as an I1 width failure, which is too indirect to call a guard. |
 
 - **I1 — every row is exactly the terminal width.** `ansi.StringWidth(row) == m.width`.
   Cells, not bytes or runes; `💭` is one rune and two cells.
@@ -77,6 +95,9 @@ can see.
 - **I4 — reset before a boundary.** Emit `ansi.ResetStyle` before a column join
   so content cannot colour the divider.
 - **I5 — symmetric gaps**, from the Fibonacci ladder `1, 2, 3, 5, 8, 13, 21`.
+  The ladder is a **convention, not a constant**: no such slice or helper exists
+  in the code. Gaps are literals in that range, and the only assertion is that
+  the message block has one blank row above and one below.
 - **TUI output safety** (`AGENTS.md`): never write to `os.Stdout`/`os.Stderr`
   while the TUI is active; route diagnostics through the session logger.
 
@@ -217,10 +238,18 @@ colour on that line is invisible, so the two changes ship together.
 | `Verbosity` folded into `renderKey` so a mode change cannot replay cached bytes | `TestCollapsedThinkingInModes` |
 | `/subagents` opens a picker; `Ctrl+X` cancels one agent; selecting expands its card to 25 rows | `TestAgentSearchItems`, `TestExpandAgentCard`, `TestExpandedAgentWidensCardWindow`, `TestCancelSelectedAgentReportsOrchestratorError` |
 | Sidebar folds detail rows instead of silently clipping whole sections | `TestSidebarFoldKeepsEveryHeading`, `TestSidebarFoldReportsWhatItHid`, `TestSidebarFoldWidths` |
+| Bare `/theme` opens a picker that previews live, saves on Enter, reverts on Esc | `TestThemePickerOpeningDoesNotChangeTheme`, `TestThemePickerEscRevertsToOpenedTheme`, `TestThemePickerEnterCommitsAndCloses` |
+| Bare `/model` opens a picker over the configured roles | `TestModelPickerListsRoles`, `TestModelPickerEnterSwitchesThroughTheSamePath` |
+| `/timeline` lists user turns and scrolls to one | `TestTimelinePickerEnterJumps`, `TestLineOffsets_MapEveryMessageSurvivesCollapse` |
 
 ---
 
 ## Phase 2 (P0.2) — `@file` mentions, fuzzy ranking, and line ranges
+
+> **Status: partially implemented.** The two defects below are fixed and
+> guarded. The `@` picker itself is **not** wired: `CompleteMention` still has
+> no production caller, so there is no inline popup and no fuzzy ranking. Task 1
+> is the part that remains, and it is a feature, not a fix.
 
 ### Objective
 
@@ -418,7 +447,9 @@ while mutations and failures stay prominent.
    alone — a summary plus a count costs more than the card. The run ends at any
    non-read card, a pending card (`toolPending()`), or a failure
    (`isFailedToolResult`, which reads the JSON `error`/`exit_code` markers that
-   tool results actually carry).
+   tool results actually carry — but that is the second line of defence:
+   `foldableExploration` also rejects `msg.isError` before it ever gets there, and
+   requires `toolBlockKind(msg.tool) == blockRead`.)
 4. ✅ A finished thinking block collapses to
    `  ▸ Thought · <first non-blank line, 60 cols> (N lines)` in `Smart` and
    `Compact`; `Expanded` keeps the six-line window, and a live block
@@ -455,6 +486,8 @@ through first.
 
 ## Phase 5 (P1.3) — Interactive selectors in `searchPopup`
 
+> **Status: implemented** on `fix/tui-plan-findings`.
+
 ### Objective
 
 Turn bare `/theme`, `/model`, and a timeline command into filterable pickers,
@@ -462,45 +495,90 @@ with live theme preview.
 
 ### Current state (verified)
 
-- Bare `/theme` appends a rendered list as a message (`commands.go:1060`);
-  bare `/model` appends `formatModelInfo()` text (`commands.go:514`). Neither
-  opens the popup.
-- There is **no `/timeline` command** and no timeline UI. `Ctrl+T` is the
-  textarea's transpose binding, so it is not free.
+- Bare `/theme` appended a rendered list as a message (`commands.go:1060`); bare
+  `/model` appended `formatModelInfo()` text (`commands.go:514`). Neither opened
+  the popup. Both now open one, and a second invocation closes it, matching
+  `/subagents` and the Ctrl+B popup.
+- There was **no `/timeline` command** and no timeline UI. `Ctrl+T` is the
+  textarea's transpose binding, so it is not free; `/timeline` is a command, not
+  a chord.
 - The model list is not available to the TUI. `Config` has `ModelSwitcher` but
-  no lister; enumerating candidates means threading one in (`internal/provider`
-  has `ListModels`, currently used only from `internal/cli`).
-- Theme persistence exists (`saveThemeToConfig`, `theme.go:221`), but there is no
-  preview/revert: `applyTheme` (`tui.go:518`) always commits.
+  no lister. **The picker therefore lists configured `Roles`, not provider
+  models**: a role is what the rest of the app resolves a model through and what
+  `switchModelTarget` accepts, so a row and `/model <row>` take one code path.
+  Threading a provider lister remains possible and is not required for the
+  picker to be useful — but a user with no configured roles and a provider
+  catalogue full of models still gets text, not a picker.
+- Theme persistence exists (`saveThemeToConfig`, `theme.go:221`), but there was
+  no preview/revert: `applyTheme` (`tui.go:518`) always commits.
+- Nothing mapped a message index to a rendered line. `renderMessages` returned
+  text and per-line `blockKind`s only, so a timeline jump had nowhere to point.
 
 ### Files
 
-- `internal/tui/tui.go`, `internal/tui/commands.go`, `internal/tui/types.go`
-- `internal/tui/tui_test.go`
+- `internal/tui/tui.go`, `internal/tui/commands.go`, `internal/tui/chat.go`
+- `internal/tui/theme_picker_test.go`, `internal/tui/model_picker_test.go`,
+  `internal/tui/timeline_test.go`
 
 ### Tasks
 
-1. Give `searchPopupState` a `payload any` field (or per-mode sub-structs) to
-   carry the original theme, the candidate list, and the scroll targets.
-2. `/theme` with no args opens `searchModeThemes` listing `ThemeManager.List()`
-   with a 🌙/☀️ variant column. `Up`/`Down` preview via `applyTheme`; `Enter`
-   persists via `saveThemeToConfig`; `Esc` restores the captured original.
-3. `/model` with no args opens `searchModeModels` over configured `Roles` plus,
-   if a lister is threaded in, provider models. Show role tags
-   (`default`/`smol`/`slow`/`plan`); `Enter` calls the existing switch path.
-4. Add `/timeline` (not a `Ctrl` chord) listing user turns with index and a
-   truncated preview; `Enter` sets `chatModel.Scroll` to that message boundary.
-   Scrolling to a boundary needs a mapping from message index to rendered line,
-   which `renderMessages` already computes in `kinds`; expose it rather than
-   recomputing.
-5. Render right-aligned key hints in the popup, inside `searchPopupChrome`.
-6. Tests: preview/commit/revert, model selection, timeline jump offset.
+1. ✅ `searchPopupState` gained a `payload *searchPopupPayload` carrying the
+   theme picker's `originalTheme` and `originalBgDetected`. It is captured once,
+   when the popup opens. Re-capturing per keystroke would make "original"
+   whatever the last preview left behind, so Esc would revert to a preview
+   rather than to what the user started with.
+2. ✅ Bare `/theme` opens `searchModeThemes` over `ThemeManager.List()`, with a
+   🌙/☀️ variant column (`SearchItem.Icon`). `Up`/`Down`/`Tab` preview via
+   `SetTheme` + `applyTheme`; `Enter` persists through `saveThemeToConfig`; `Esc`
+   restores the captured original. **The picker opens on the active theme, not
+   row 0** — opening is not a choice, and previewing row 0 repainted the whole
+   TUI just because the user asked to see the list.
+3. ✅ Bare `/model` opens `searchModeModels` over the configured `Roles`. The row
+   text is the role name and the description carries the model, provider and an
+   `· active` marker. A role with no model is omitted rather than offered as a
+   row that can only report "role has no model configured". The
+   resolve-switch-rebuild sequence moved out of `handleModelCommand` into
+   `switchModelTarget` so the picker and the command cannot drift.
+4. ✅ `/timeline` lists user turns by number with a first-line preview, and
+   `Enter` sets `chatModel.Scroll` to that message's line. The mapping comes from
+   `renderMessagesWithOffsets`, which `View` stores on the model as
+   `msgLineOffsets`; `collapseBlankLinesMapped` returns the line map so an offset
+   taken before blank-line collapse names the same message after it.
+5. ⬜ Right-aligned key hints inside `searchPopupChrome` were **not** added. Every
+   popup row currently costs `searchPopupChrome = 4` rows and the hints would
+   need a fifth or an existing row's budget; the search-prompt row still says
+   "type to filter" only. Left as a follow-up rather than rushed.
+6. ✅ Tests: `TestThemePicker*` (listing, preview-on-move, open-without-repaint,
+   Esc revert, payload captured once, Enter commit, filtering, no-match,
+   second-command close), `TestModelPicker*` (listing, ordering, skipped empty
+   role, active marker, Enter through the shared path, second-command close,
+   text fallback with no roles, filtering), `TestTimeline*` and
+   `TestLineOffsets_MapEveryMessageSurvivesCollapse`.
+
+### Two bugs the tests caught
+
+Both were in the new code and neither was visible by reading it:
+
+- The offsets slice's one-past-the-end sentinel was never assigned, so the last
+  entry stayed `0` and every jump measured a total line count of zero. Nothing
+  scrolled, and the failure looked like "jump does nothing" rather than "offset
+  table is wrong".
+- `jumpToMessage` clamped with `MaxScroll(m.messageViewportHeight())`. `MaxScroll`
+  takes the *terminal* height and subtracts its own chrome, so passing it the
+  already-reduced viewport double-counted the chrome and short-changed every
+  jump. The clamp is gone: the computed offset cannot exceed the largest scroll
+  `clipMessagesToViewport` honours, because `start` is never negative.
+
+`TestLineOffsets_MapEveryMessageSurvivesCollapse` was confirmed to fail when the
+sentinel assignment is removed, and `TestThemePickerOpeningDoesNotChangeTheme`
+fails when the open-on-current-row selection is removed — so both guards are
+real rather than self-referential.
 
 ### Acceptance criteria
 
-- `/theme` previews on move, saves on Enter, restores on Esc.
-- `/model` opens a picker.
-- `/timeline` jumps to a chosen turn.
+- ✅ `/theme` previews on move, saves on Enter, restores on Esc.
+- ✅ `/model` opens a picker over the configured roles.
+- ✅ `/timeline` jumps to a chosen turn.
 
 ---
 

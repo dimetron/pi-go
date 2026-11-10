@@ -20,6 +20,10 @@ func TestKindOf(t *testing.T) {
 		{"thinking", message{role: "thinking"}, blockThinking},
 		{"read tool", message{role: "tool", tool: "read"}, blockRead},
 		{"grep tool", message{role: "tool", tool: "grep"}, blockRead},
+		// ripgrep is the name the search tool actually registers under when rg is
+		// installed (internal/tools/grep.go newGrepTool). Omitting it gave every
+		// real search the neutral blockTool color on the rail.
+		{"ripgrep tool", message{role: "tool", tool: "ripgrep"}, blockRead},
 		{"edit tool", message{role: "tool", tool: "edit"}, blockEdit},
 		{"write tool", message{role: "tool", tool: "write"}, blockEdit},
 		{"bash tool", message{role: "tool", tool: "bash"}, blockExecute},

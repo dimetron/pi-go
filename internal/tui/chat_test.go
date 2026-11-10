@@ -754,3 +754,188 @@ func TestChatModel_RenderMarkdown_ExpandsLinks(t *testing.T) {
 		t.Errorf("expected expanded link in output, got %q", got)
 	}
 }
+
+// explorationMsgs builds a run of completed read-only cards plus the filler a real
+// transcript has between them.
+func explorationMsgs() []message {
+	msgs := []message{{role: "user", content: "look around"}}
+	for i := 0; i < 5; i++ {
+		msgs = append(msgs, message{role: "tool", tool: "read", toolIn: "a.go", content: "line"})
+	}
+	for i := 0; i < 3; i++ {
+		msgs = append(msgs, message{role: "tool", tool: "ripgrep", toolIn: "func", content: "a.go:1: func x"})
+	}
+	return msgAddsSeparator(msgs)
+}
+
+// msgAddsSeparator is a no-op placeholder documenting that renderMessageBlock adds
+// the leading newline itself; kept so the fixture reads as intent rather than magic.
+func msgAddsSeparator(m []message) []message { return m }
+
+func renderChat(t *testing.T, c *ChatModel, running bool) string {
+	t.Helper()
+	c.Width = 80
+	out, kinds := c.renderMessages(running)
+	// The kinds slice is the minimap's source of truth; keep it aligned with the
+	// rendered lines or the rail drifts out of step with the transcript.
+	// renderMessages' invariant is one kind per line plus a trailing entry
+	// (strings.Count+1), the convention TestRenderMessagesKindsStayAlignedRender pins.
+	if want := strings.Count(out, "\n") + 1; len(kinds) != want {
+		t.Fatalf("kinds has %d entries for %d lines — the rail would desync", len(kinds), want)
+	}
+	return ansi.Strip(out)
+}
+
+// TestExplorationGroupFoldsContiguousRun is the headline behavior: five reads and
+// three searches render as one line instead of eight cards.
+func TestExplorationGroupFoldsContiguousRun(t *testing.T) {
+	c := NewChatModel(nil)
+	c.Messages = explorationMsgs()
+
+	smart := renderChat(t, &c, false)
+	if !strings.Contains(smart, "Explored") {
+		t.Fatalf("smart mode did not fold the run:\n%s", smart)
+	}
+	for _, want := range []string{"5 reads", "3 searches"} {
+		if !strings.Contains(smart, want) {
+			t.Errorf("summary missing %q:\n%s", want, smart)
+		}
+	}
+	// The individual cards must be gone.
+	if strings.Contains(smart, "read(a.go)") {
+		t.Errorf("folded run still renders individual read cards:\n%s", smart)
+	}
+
+	// Expanded mode shows them all.
+	c.ToolDisplay.Verbosity = VerbosityExpanded
+	expanded := renderChat(t, &c, false)
+	if strings.Contains(expanded, "Explored") {
+		t.Error("expanded mode still folded the run")
+	}
+	if got := strings.Count(expanded, "read(a.go)"); got != 5 {
+		t.Errorf("expanded mode rendered %d read cards, want 5", got)
+	}
+}
+
+// TestExplorationGroupBrokenByMutation checks that a mutation ends the fold, so an
+// edit is never hidden behind a summary.
+func TestExplorationGroupBrokenByMutation(t *testing.T) {
+	c := NewChatModel(nil)
+	c.Messages = []message{
+		{role: "user", content: "go"},
+		{role: "tool", tool: "read", toolIn: "a.go", content: "x"},
+		{role: "tool", tool: "read", toolIn: "b.go", content: "x"},
+		{role: "tool", tool: "edit", toolIn: "c.go", content: "1 replacements"},
+		{role: "tool", tool: "read", toolIn: "d.go", content: "x"},
+		{role: "tool", tool: "read", toolIn: "e.go", content: "x"},
+	}
+	out := renderChat(t, &c, false)
+
+	if !strings.Contains(out, "edit(c.go)") {
+		t.Error("the edit card was folded away")
+	}
+	// Two runs of two, one either side of the edit.
+	if got := strings.Count(out, "Explored"); got != 2 {
+		t.Errorf("Explored summary appeared %d times, want 2 (one run either side of the edit):\n%s", got, out)
+	}
+}
+
+// TestExplorationGroupBrokenByFailure pins that a failed read is never folded: it is
+// the one read the reader most needs to see.
+func TestExplorationGroupBrokenByFailure(t *testing.T) {
+	c := NewChatModel(nil)
+	c.Messages = []message{
+		{role: "user", content: "go"},
+		{role: "tool", tool: "read", toolIn: "a.go", content: "x"},
+		// A failed read is a JSON error payload — the shape isFailedToolResult reads.
+		{role: "tool", tool: "read", toolIn: "b.go", content: `{"error":"file not found"}`},
+		{role: "tool", tool: "read", toolIn: "c.go", content: "x"},
+		{role: "tool", tool: "read", toolIn: "d.go", content: "x"},
+	}
+	out := renderChat(t, &c, false)
+	if !strings.Contains(out, "b.go") {
+		t.Errorf("a failed read was folded away:\n%s", out)
+	}
+}
+
+// TestExplorationGroupKeepsPendingVisible checks the live-progress rule: a card still
+// waiting on its result must render, not join the group.
+func TestExplorationGroupKeepsPendingVisible(t *testing.T) {
+	c := NewChatModel(nil)
+	c.Messages = []message{
+		{role: "user", content: "go"},
+		{role: "tool", tool: "read", toolIn: "a.go", content: "x"},
+		{role: "tool", tool: "read", toolIn: "b.go", content: "x"},
+		{role: "tool", tool: "read", toolIn: "pending.go"}, // no content yet
+	}
+	out := renderChat(t, &c, true)
+	if !strings.Contains(out, "pending.go") {
+		t.Errorf("a pending read was folded away, hiding live progress:\n%s", out)
+	}
+}
+
+// TestExplorationGroupSingleCardNotFolded: one card is cheaper to read than a summary
+// plus a count.
+func TestExplorationGroupSingleCardNotFolded(t *testing.T) {
+	c := NewChatModel(nil)
+	c.Messages = []message{
+		{role: "user", content: "go"},
+		{role: "tool", tool: "read", toolIn: "only.go", content: "x"},
+	}
+	out := renderChat(t, &c, false)
+	if strings.Contains(out, "Explored") {
+		t.Errorf("a single read was folded:\n%s", out)
+	}
+}
+
+// TestCollapsedThinkingInModes pins when a thinking block collapses.
+func TestCollapsedThinkingInModes(t *testing.T) {
+	msgs := []message{
+		{role: "user", content: "go"},
+		{role: "thinking", content: "First heading\nmore detail\nand more"},
+		{role: "assistant", content: "done"},
+	}
+	for _, tc := range []struct {
+		mode       ToolVerbosity
+		wantFold   bool
+		wantDetail bool
+	}{
+		{VerbositySmart, true, false},
+		{VerbosityCompact, true, false},
+		// Expanded keeps every line, INCLUDING the six-line window.
+		{VerbosityExpanded, false, true},
+	} {
+		c := NewChatModel(nil)
+		c.Messages = msgs
+		c.ToolDisplay.Verbosity = tc.mode
+		// ToolDisplayModel is copied by value into ChatModel, so the mode has to be
+		// set on the copy the renderer reads. (Setting it before this point edits a
+		// struct that is then overwritten.)
+		c.ToolDisplay.Verbosity = tc.mode
+		out := renderChat(t, &c, false)
+		if gotFold := strings.Contains(out, "Thought"); gotFold != tc.wantFold {
+			t.Errorf("%v: collapsed = %v, want %v:\n%s", tc.mode, gotFold, tc.wantFold, out)
+		}
+		if gotDetail := strings.Contains(out, "and more"); gotDetail != tc.wantDetail {
+			t.Errorf("%v: detail shown = %v, want %v:\n%s", tc.mode, gotDetail, tc.wantDetail, out)
+		}
+	}
+}
+
+// TestThinkingStaysLiveWhileStreaming: a block the model is still producing must not
+// collapse — the point of streaming it is to watch it.
+func TestThinkingStaysLiveWhileStreaming(t *testing.T) {
+	c := NewChatModel(nil)
+	c.Messages = []message{
+		{role: "user", content: "go"},
+		{role: "thinking", content: "reasoning now"},
+	}
+	c.Thinking = "reasoning now" // the agent loop's marker for an open block
+	out := renderChat(t, &c, true)
+	if strings.Contains(out, "Thought") {
+		t.Errorf("a live thinking block was collapsed:\n%s", out)
+	}
+	if !strings.Contains(out, "reasoning now") {
+		t.Errorf("live thinking text is not shown:\n%s", out)
+	}
+}

@@ -602,6 +602,10 @@ func TestToolResultShapesReject(t *testing.T) {
 		"write":       writeResultSummary,
 		"edit":        editResultSummary,
 		"diagnostics": diagnosticsResultSummary,
+		"gitOverview": gitOverviewResultSummary,
+		"gitDiff":     gitDiffResultSummary,
+		"gitHunk":     gitHunkResultSummary,
+		"readImage":   readImageResultSummary,
 		"bashWindow":  bashWindowResultSummary,
 		"bashExit":    bashExitResultSummary,
 		"a2a":         a2aResultSummary,
@@ -781,9 +785,12 @@ func TestRenderMessagesBlocksRender(t *testing.T) {
 			want: "\n⚠ x\n",
 		},
 		{
-			desc: "thinking keeps only the last six lines", width: 40,
+			// Smart mode (the zero value) collapses a finished thinking block to its
+			// summary. This case used to pin the six-line window, which is still what
+			// an expanded view shows — see the expanded case below.
+			desc: "finished thinking collapses to one summary row in smart mode", width: 40,
 			msgs: []message{{role: "thinking", content: "a\nb\nc\nd\ne\nf\ng\nh"}},
-			want: "\n💭 c\n   d\n   e\n   f\n   g\n   h\n",
+			want: "\n  ▸ Thought · a (8 lines)\n",
 		},
 		{
 			desc: "empty thinking renders nothing", width: 40,
@@ -1124,7 +1131,7 @@ func TestAgentWindowLinesRender(t *testing.T) {
 	st := newAgentEventStyles("", Palette{})
 
 	t.Run("empty stream has no lines and no note", func(t *testing.T) {
-		lines, note := agentWindowLines(nil, st, 60)
+		lines, note := agentWindowLines(nil, st, 60, maxAgentOutputLines)
 		if len(lines) != 0 || note != "" {
 			t.Errorf("got %d lines, note %q", len(lines), note)
 		}
@@ -1132,7 +1139,7 @@ func TestAgentWindowLinesRender(t *testing.T) {
 
 	t.Run("under budget shows everything with no note", func(t *testing.T) {
 		evs := []agentEv{{kind: "text", content: "a"}, {kind: "text", content: "b"}}
-		lines, note := agentWindowLines(evs, st, 60)
+		lines, note := agentWindowLines(evs, st, 60, maxAgentOutputLines)
 		if len(lines) != 2 || note != "" {
 			t.Errorf("got %d lines %v, note %q", len(lines), lines, note)
 		}
@@ -1146,7 +1153,7 @@ func TestAgentWindowLinesRender(t *testing.T) {
 		for i := range evs {
 			evs[i] = agentEv{kind: "text", content: fmt.Sprintf("e%d", i)}
 		}
-		lines, note := agentWindowLines(evs, st, 60)
+		lines, note := agentWindowLines(evs, st, 60, maxAgentOutputLines)
 		if len(lines) != maxAgentOutputLines {
 			t.Errorf("got %d lines, want %d", len(lines), maxAgentOutputLines)
 		}
@@ -1160,7 +1167,7 @@ func TestAgentWindowLinesRender(t *testing.T) {
 
 	t.Run("one over-long event reports a clip", func(t *testing.T) {
 		evs := []agentEv{{kind: "text", content: strings.Repeat("word ", 200)}}
-		lines, note := agentWindowLines(evs, st, 40)
+		lines, note := agentWindowLines(evs, st, 40, maxAgentOutputLines)
 		if len(lines) != maxAgentOutputLines {
 			t.Errorf("got %d lines, want %d", len(lines), maxAgentOutputLines)
 		}

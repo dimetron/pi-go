@@ -96,6 +96,44 @@ func agentBracketLabel(agentType string) string {
 	return strings.Join(out, "+")
 }
 
+// ToolVerbosity is how much of each tool card the transcript shows.
+//
+// It is a three-state cycle rather than a boolean because two questions are
+// independent: "fold runs of read-only exploration?" and "show tool output at
+// all?". A boolean could only answer both at once, so Ctrl+O used to jump from
+// every card expanded straight to every card one-lined, with no way to ask for
+// "quiet while the agent explores, but show me every edit".
+type ToolVerbosity int
+
+const (
+	// VerbositySmart is the default: completed, error-free read-only exploration
+	// folds into one summary line per contiguous run; everything else renders in
+	// full, and a card that is still running stays expanded so live progress is
+	// visible.
+	VerbositySmart ToolVerbosity = iota
+	// VerbosityExpanded shows every card in full and folds nothing.
+	VerbosityExpanded
+	// VerbosityCompact renders every card as a single line.
+	VerbosityCompact
+)
+
+// String names the mode for the flash shown when cycling.
+func (v ToolVerbosity) String() string {
+	switch v {
+	case VerbosityExpanded:
+		return "expanded"
+	case VerbosityCompact:
+		return "compact"
+	default:
+		return "smart"
+	}
+}
+
+// next returns the mode Ctrl+O cycles to.
+func (v ToolVerbosity) next() ToolVerbosity {
+	return (v + 1) % 3
+}
+
 // ToolDisplayModel manages the formatting and rendering of tool call/result
 // messages in the chat view. It owns per-tool formatters, syntax highlighting,
 // and summary generation.
@@ -104,6 +142,11 @@ type ToolDisplayModel struct {
 	Width int
 	// CompactTools when true shows one-line summaries instead of full output.
 	CompactTools bool
+	// Verbosity controls transcript grouping. CompactTools stays authoritative for
+	// the card format itself; Verbosity is what the chat render loop consults for
+	// whether to fold a run of exploration cards. Splitting them is what lets
+	// VerbositySmart compact only the cards it folds.
+	Verbosity ToolVerbosity
 	// Palette is the resolved theme palette, set each frame by the model before
 	// rendering. Zero means the dark default.
 	Palette Palette
@@ -112,6 +155,9 @@ type ToolDisplayModel struct {
 	// and off so an active tool is visible at a glance; finished cards render
 	// the bullet solid.
 	BlinkOn bool
+	// ExpandedAgentID names the subagent card showing its full event stream, empty
+	// when none is. Set each frame by the model from its own expandedAgent field.
+	ExpandedAgentID string
 }
 
 // toolBullet renders the header bullet for a tool card. While the card is still
@@ -232,13 +278,24 @@ func writeGutterLines(b *strings.Builder, dim lipgloss.Style, lines ...string) {
 
 // renderAgentTool renders an agent/subagent tool message with type, title,
 // event stream, and result summary.
+//
+// A card whose agent is selected in the agents picker renders its whole event
+// stream (ExpandedAgentID) instead of the normal three-line window. The budget
+// rides on ToolDisplayModel rather than on message so that expanding is a
+// property of what the user is looking at, not a mutation of the card — and so
+// the render cache keys stay honest: the model's field is part of how the card is
+// drawn, and renderKey already folds ToolDisplay's state for the tools it needs.
 func (t *ToolDisplayModel) renderAgentTool(msg message, dim lipgloss.Style, p Palette) string {
 	var b strings.Builder
 	b.WriteString(t.agentCardHeader(msg, p))
 
 	cw := t.contentWidth()
+	budget := maxAgentOutputLines
+	if t.ExpandedAgentID != "" && msg.agentID == t.ExpandedAgentID {
+		budget = expandedAgentOutputLines
+	}
 	if len(msg.agentEvents) > 0 {
-		b.WriteString(agentEventWindow(msg, dim, p, cw))
+		b.WriteString(agentEventWindow(msg, dim, p, cw, budget))
 	}
 	if msg.content != "" {
 		b.WriteString(agentResultSummary(msg.content, dim, cw))
@@ -310,9 +367,9 @@ func agentTitleFit(title string, n int) string {
 
 // agentEventWindow renders the card's live event stream, newest activity last,
 // preceded by a note whenever output was withheld.
-func agentEventWindow(msg message, dim lipgloss.Style, p Palette, cw int) string {
+func agentEventWindow(msg message, dim lipgloss.Style, p Palette, cw, budget int) string {
 	renderable := renderableAgentEvents(msg.agentEvents)
-	lines, note := agentWindowLines(renderable, newAgentEventStyles(msg.agentType, p), cw)
+	lines, note := agentWindowLines(renderable, newAgentEventStyles(msg.agentType, p), cw, budget)
 
 	var b strings.Builder
 	if note != "" {
@@ -359,18 +416,21 @@ func renderableAgentEvents(evs []agentEv) []agentEv {
 // The note is written whenever output was withheld. A single huge event is
 // clipped without any whole event being dropped, and hiding 60-odd lines with
 // no mark would read as if that were all the agent said.
-func agentWindowLines(renderable []agentEv, st agentEventStyles, cw int) (lines []string, note string) {
+func agentWindowLines(renderable []agentEv, st agentEventStyles, cw, budget int) (lines []string, note string) {
+	if budget <= 0 {
+		budget = maxAgentOutputLines
+	}
 	used := 0
-	for i := len(renderable) - 1; i >= 0 && len(lines) < maxAgentOutputLines; i-- {
+	for i := len(renderable) - 1; i >= 0 && len(lines) < budget; i-- {
 		lines = append(agentEventLines(renderable[i], st, cw), lines...)
 		used++
 	}
 	skipped := len(renderable) - used
-	clipped := len(lines) > maxAgentOutputLines
+	clipped := len(lines) > budget
 	if clipped {
 		// The oldest event still in the window overflows it; show its tail,
 		// which is the part nearest the newer output below it.
-		lines = lines[len(lines)-maxAgentOutputLines:]
+		lines = lines[len(lines)-budget:]
 	}
 
 	switch {
@@ -457,6 +517,12 @@ func (t *ToolDisplayModel) renderLiveOutput(msg message, dim lipgloss.Style, p P
 // result summary and in the parent's own reply, so the stream only has to show
 // enough to see what the agent is doing right now.
 const maxAgentOutputLines = 3
+
+// expandedAgentOutputLines is the window for the one card the user has opened from
+// the agents picker. 25 is chosen to fit a typical 30-row terminal alongside the
+// header and the result summary, so an expanded card is readable without scrolling
+// the whole event history into view.
+const expandedAgentOutputLines = 25
 
 // agentEventStyles is the per-kind stylesheet for a subagent card's event
 // window. The card mixes four different sorts of line — what the agent said,
@@ -556,10 +622,21 @@ func isFailedToolResult(content string) bool {
 
 // truncateRunes clips s to at most n runes, marking the cut. Slicing by byte
 // would split a multi-byte rune and emit a replacement character.
+//
+// n < 3 used to panic: the cut is r[:n-3] plus "...", and a negative bound is a
+// slice out of range. No caller passes n < 3 today (argWidth floors at 60), but
+// the panicking bound was one call site away from a crash, so it is closed here
+// rather than left as a comment. Below the marker's own width, drop the marker.
 func truncateRunes(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
 	r := []rune(s)
 	if len(r) <= n {
 		return s
+	}
+	if n <= len("...") {
+		return string(r[:n])
 	}
 	return string(r[:n-3]) + "..."
 }
@@ -719,6 +796,10 @@ func highlightToolOutput(msg message, lines []string, dim lipgloss.Style, p Pale
 		return highlightGrepOutput(lines, p)
 	case msg.tool == "find":
 		return highlightFindOutput(lines, p)
+	case msg.tool == "git-file-diff" || msg.tool == "git-hunk":
+		return highlightDiffOutput(lines, p)
+	case msg.tool == "git-overview":
+		return highlightGitOverviewOutput(lines, p)
 	default:
 		styled := make([]string, len(lines))
 		for i, line := range lines {
@@ -876,6 +957,14 @@ var toolResultShapes = []toolResultShape{
 	writeResultSummary,
 	editResultSummary,
 	diagnosticsResultSummary,
+	// Diff and repository-inspection shapes, in specificity order: git-overview
+	// owns three separate file lists, so it has to be tried before the shapes
+	// that key on a single list, and both diff shapes carry a `file` key that
+	// nothing else here reads.
+	gitOverviewResultSummary,
+	gitDiffResultSummary,
+	gitHunkResultSummary,
+	readImageResultSummary,
 	bashWindowResultSummary,
 	bashExitResultSummary,
 	a2aResultSummary,
@@ -891,6 +980,188 @@ func formatToolResult(data map[string]any) string {
 	// Fallback: compact JSON
 	b, _ := json.Marshal(data)
 	return clipToolSummary(string(b))
+}
+
+// gitDiffResultSummary formats a git-file-diff result as a one-line stat
+// followed by the unified diff. Before this existed the shape fell through to
+// the JSON fallback, so a diff card printed
+//
+//	{"diff":"@@ -1,3 +1,4 @@\n-old\n+new\n","file":"a.go",...
+//
+// with the newlines escaped — the one tool in the set whose entire payload is
+// meant to be read as lines was the one rendering as a single mangled line.
+//
+// The stat leads rather than trails because regularToolOutput clips head-first
+// at 15 lines: a trailing stat on a long diff would be exactly the line the
+// reader loses, and it is the line that says how big the change is.
+func gitDiffResultSummary(data map[string]any) (string, bool) {
+	diff, ok := data["diff"].(string)
+	if !ok {
+		return "", false
+	}
+	if binary, _ := data["binary"].(bool); binary {
+		return "(binary file, no textual diff)", true
+	}
+	added, _ := data["lines_added"].(float64)
+	removed, _ := data["lines_removed"].(float64)
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "(%d added, %d removed", int(added), int(removed))
+	if trunc, _ := data["truncated"].(bool); trunc {
+		b.WriteString(", truncated")
+	}
+	b.WriteString(")\n")
+	b.WriteString(diff)
+	return strings.TrimRight(b.String(), "\n"), true
+}
+
+// gitHunkResultSummary formats a git-hunk result as its hunks, each under its
+// own @@ header. Same fallback bug as git-file-diff: without this shape the
+// card printed the parsed hunks back as JSON.
+func gitHunkResultSummary(data map[string]any) (string, bool) {
+	hunks, ok := data["hunks"].([]any)
+	if !ok {
+		return "", false
+	}
+	if len(hunks) == 0 {
+		return "(no changes)", true
+	}
+	var b strings.Builder
+	for i, h := range hunks {
+		entry, ok := h.(map[string]any)
+		if !ok {
+			continue
+		}
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		if header, _ := entry["header"].(string); header != "" {
+			b.WriteString(header)
+			b.WriteString("\n")
+		}
+		if content, _ := entry["content"].(string); content != "" {
+			b.WriteString(content)
+			if !strings.HasSuffix(content, "\n") {
+				b.WriteString("\n")
+			}
+		}
+	}
+	total, _ := data["total_hunks"].(float64)
+	if int(total) > len(hunks) {
+		fmt.Fprintf(&b, "(%d of %d hunks shown)\n", len(hunks), int(total))
+	}
+	return strings.TrimRight(b.String(), "\n"), true
+}
+
+// gitOverviewResultSummary formats a git-overview result as the branch, its
+// upstream position, and the per-state file lists.
+//
+// It must be registered before the ls shape and must own both of its lists: the
+// result carries three separate file lists under distinct keys, and a shape that
+// claimed one of those keys would either print a bare filename list with no
+// branch or refuse the result on the field order. Without this shape the card
+// printed the whole repository overview as one line of JSON.
+func gitOverviewResultSummary(data map[string]any) (string, bool) {
+	branch, ok := data["branch"].(string)
+	if !ok {
+		return "", false
+	}
+
+	// A list that is absent means "not requested", which is different from empty
+	// ("nothing there"). includeOrDefault in the tool makes absent mean include,
+	// so a key that is missing is reported as empty rather than omitted.
+	list := func(key string) []string {
+		raw, _ := data[key].([]any)
+		out := make([]string, 0, len(raw))
+		for _, v := range raw {
+			if s, ok := v.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+
+	var b strings.Builder
+	b.WriteString(branch)
+	if up, _ := data["upstream"].(string); up != "" {
+		ahead, _ := data["ahead"].(float64)
+		behind, _ := data["behind"].(float64)
+		fmt.Fprintf(&b, " → %s", up)
+		if ahead > 0 || behind > 0 {
+			fmt.Fprintf(&b, " (+%d/-%d)", int(ahead), int(behind))
+		}
+	}
+
+	if commits := list("recent_commits"); len(commits) > 0 {
+		for _, c := range commits {
+			b.WriteString("\n  ")
+			b.WriteString(c)
+		}
+	}
+
+	// The dirty-state lists are the part a reader acts on, so they are printed in
+	// full: capping them would hide a file the user has to know about.
+	for _, sec := range []struct {
+		label string
+		key   string
+	}{
+		{"staged", "staged_files"},
+		{"unstaged", "unstaged_files"},
+		{"untracked", "untracked_files"},
+	} {
+		files := list(sec.key)
+		if len(files) == 0 {
+			continue
+		}
+		fmt.Fprintf(&b, "\n%s [%d]:", sec.label, len(files))
+		for _, f := range files {
+			b.WriteString("\n  ")
+			b.WriteString(f)
+		}
+	}
+	return strings.TrimRight(b.String(), "\n"), true
+}
+
+// readImageResultSummary formats a read_image result as the image identity: its
+// dimensions, MIME type, and size.
+//
+// The tool has returned this struct since it was written; the display layer had
+// no shape for it, so a vision read rendered as
+// {"bytes":12345,"height":600,"path":"shot.png","width":800} — which tells the
+// reader nothing about the picture and cannot be told apart from an error.
+func readImageResultSummary(data map[string]any) (string, bool) {
+	path, ok := data["path"].(string)
+	if !ok {
+		return "", false
+	}
+	// `size` is the field the tool emits; tolerate `bytes` so a hand-formed or
+	// older payload still summarizes rather than falling through to raw JSON.
+	size, ok := data["size"].(float64)
+	if !ok {
+		size, _ = data["bytes"].(float64)
+	}
+	w, _ := data["width"].(float64)
+	h, _ := data["height"].(float64)
+	mime, _ := data["mime_type"].(string)
+
+	var b strings.Builder
+	b.WriteString(path)
+	var meta []string
+	if int(w) > 0 && int(h) > 0 {
+		meta = append(meta, fmt.Sprintf("%dx%d", int(w), int(h)))
+	}
+	if mime != "" {
+		meta = append(meta, mime)
+	}
+	if int(size) > 0 {
+		meta = append(meta, fmt.Sprintf("%d bytes", int(size)))
+	}
+	if len(meta) > 0 {
+		b.WriteString(" (")
+		b.WriteString(strings.Join(meta, ", "))
+		b.WriteString(")")
+	}
+	return b.String(), true
 }
 
 // lsResultSummary formats an ls result as its file/dir names.
@@ -1216,9 +1487,27 @@ func bashLimitsHint(data map[string]any) string {
 	return ""
 }
 
-// bashOutputPreview condenses command output to its first and last two lines,
-// each clipped to 80 columns. Returns "" when there was no output at all, which
-// callers report in their own words.
+// bashPreviewHeadLines and bashPreviewTailLines split the preview window. The
+// tail is where a build failure, panic trace, or failing assertion appears, so
+// it gets the larger share; the head is kept because a command's own echoed
+// header or first error often names what went wrong.
+//
+// The old split was head 2 / tail 2, which discarded the middle of every short
+// result and cut the part of a long log that explains the failure.
+const (
+	bashPreviewHeadLines = 2
+	bashPreviewTailLines = 10
+)
+
+// bashOutputPreview condenses command output to a tail-first window: the first
+// two lines, an elision marker, and the last ten, each clipped to 80 columns.
+// Returns "" when there was no output at all, which callers report in their own
+// words.
+//
+// The elision marker carries the count of lines it stands in for. A bare "…"
+// leaves the reader unable to tell a 30-line build log from a 3000-line one, and
+// that number is the difference between "rerun with -v" and "read the whole
+// thing".
 func bashOutputPreview(stdout, stderr string) string {
 	output := stdout
 	if output == "" {
@@ -1228,8 +1517,14 @@ func bashOutputPreview(stdout, stderr string) string {
 		return ""
 	}
 	lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
-	if len(lines) > 4 {
-		lines = []string{lines[0], lines[1], lines[len(lines)-2], lines[len(lines)-1]}
+	maxLines := bashPreviewHeadLines + bashPreviewTailLines
+	if len(lines) > maxLines {
+		elided := len(lines) - maxLines
+		kept := make([]string, 0, maxLines+1)
+		kept = append(kept, lines[:bashPreviewHeadLines]...)
+		kept = append(kept, fmt.Sprintf("  ⋯ (%d earlier lines)", elided))
+		kept = append(kept, lines[len(lines)-bashPreviewTailLines:]...)
+		lines = kept
 	}
 	clipped := make([]string, len(lines))
 	for i, line := range lines {
@@ -1394,6 +1689,41 @@ func highlightBashOutput(lines []string, p Palette) []string {
 	return strings.Split(highlighted, "\n")
 }
 
+// highlightDiffOutput colors a unified diff by line prefix.
+//
+// The four Palette diff roles are used the way a diff view uses them: added and
+// removed rows get their tint as a background and their legible paired
+// foreground on top, so the distinction survives a monochrome-safe terminal and
+// a colorblind reader (the +/- gutter is the second cue, not the only one).
+// Context lines stay on the normal text color, and everything is styled on the
+// whole line — never per-run — so softWrap and the I1 width check see one styled
+// span per row.
+func highlightDiffOutput(lines []string, p Palette) []string {
+	p = paletteOrDark(p)
+	added := lipgloss.NewStyle().Foreground(p.DiffAddedText).Background(p.DiffAdded)
+	removed := lipgloss.NewStyle().Foreground(p.DiffRemovedText).Background(p.DiffRemoved)
+	header := lipgloss.NewStyle().Foreground(p.Faint)
+	context := lipgloss.NewStyle().Foreground(p.Text)
+
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		switch {
+		case strings.HasPrefix(line, "@@"):
+			out = append(out, header.Render(line))
+		case strings.HasPrefix(line, "diff --git"), strings.HasPrefix(line, "index "),
+			strings.HasPrefix(line, "--- "), strings.HasPrefix(line, "+++ "):
+			out = append(out, header.Render(line))
+		case strings.HasPrefix(line, "+"):
+			out = append(out, added.Render(line))
+		case strings.HasPrefix(line, "-"):
+			out = append(out, removed.Render(line))
+		default:
+			out = append(out, context.Render(line))
+		}
+	}
+	return out
+}
+
 // highlightGrepOutput styles grep result lines of the form "file:line: content".
 func highlightGrepOutput(lines []string, p Palette) []string {
 	fileStyle := lipgloss.NewStyle().Foreground(p.Blue)     // blue
@@ -1435,6 +1765,64 @@ func highlightGrepOutput(lines []string, p Palette) []string {
 		result = append(result, sb.String())
 	}
 	return result
+}
+
+// highlightGitOverviewOutput styles a git-overview summary as a small panel:
+// the branch line in the primary accent, the commit subjects dim, and the
+// dirty-state headers in the tool color so a reader scanning for "is anything
+// uncommitted" finds the answer without reading every file name.
+//
+// The summary is multi-line (branch, commits, then up to three lists), so
+// without this branch the whole panel rendered in the dim default and read as
+// an afterthought beside the highlighted read/grep output above it.
+func highlightGitOverviewOutput(lines []string, p Palette) []string {
+	p = paletteOrDark(p)
+	branchStyle := lipgloss.NewStyle().Foreground(p.Primary)
+	headerStyle := lipgloss.NewStyle().Foreground(p.Tool).Bold(true)
+	commitStyle := lipgloss.NewStyle().Foreground(p.Faint)
+	fileStyle := lipgloss.NewStyle().Foreground(p.Text)
+
+	out := make([]string, 0, len(lines))
+	for i, line := range lines {
+		switch {
+		case i == 0:
+			// The branch, plus its upstream position when there is one.
+			out = append(out, branchStyle.Render(line))
+		case !strings.HasPrefix(line, " ") && strings.HasSuffix(line, ":"):
+			// A "staged [2]:" header. The file rows beneath it are indented, so
+			// the unindented colon suffix identifies the header alone.
+			out = append(out, headerStyle.Render(line))
+		case strings.HasPrefix(line, "  "):
+			// Indented content: a commit subject or a file name.
+			if looksLikeCommitRow(line) {
+				out = append(out, commitStyle.Render(line))
+			} else {
+				out = append(out, fileStyle.Render(line))
+			}
+		default:
+			out = append(out, commitStyle.Render(line))
+		}
+	}
+	return out
+}
+
+// looksLikeCommitRow reports whether an indented row is "<short-hash> <subject>"
+// rather than a file path. The hash is 7-40 lowercase hex characters followed by
+// a space; a repository-relative path in these lists does not start with a bare
+// hex token of that shape.
+func looksLikeCommitRow(line string) bool {
+	line = strings.TrimPrefix(line, "  ")
+	sp := strings.IndexByte(line, ' ')
+	if sp < 7 || sp > 40 {
+		return false
+	}
+	for i := range sp {
+		c := line[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // highlightFindOutput styles find/glob result lines as file paths.

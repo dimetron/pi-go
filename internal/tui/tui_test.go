@@ -133,21 +133,22 @@ func TestHandleSlashCommandModelShowsRoles(t *testing.T) {
 	newM, _ := m.handleSlashCommand("/model")
 	mm := newM.(*model)
 
-	if len(mm.chatModel.Messages) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(mm.chatModel.Messages))
+	// Bare /model opens the picker; every configured role is a row, with its
+	// model and provider annotation.
+	if mm.searchPopup == nil {
+		t.Fatal("bare /model did not open the model picker")
 	}
-	content := mm.chatModel.Messages[0].content
-	if !strings.Contains(content, "Configured roles:") {
-		t.Errorf("expected roles section, got %q", content)
+	rows := map[string]string{}
+	for _, item := range mm.searchPopup.entries {
+		rows[item.Text] = item.Description
 	}
-	if !strings.Contains(content, "smol") {
-		t.Errorf("expected smol role listed, got %q", content)
+	for _, role := range []string{"default", "smol", "slow"} {
+		if _, ok := rows[role]; !ok {
+			t.Errorf("role %q missing from the picker: %v", role, rows)
+		}
 	}
-	if !strings.Contains(content, "slow") {
-		t.Errorf("expected slow role listed, got %q", content)
-	}
-	if !strings.Contains(content, "[anthropic]") {
-		t.Errorf("expected provider annotation for slow role, got %q", content)
+	if got := rows["slow"]; !strings.Contains(got, "anthropic") {
+		t.Errorf("slow row = %q, want the provider annotation", got)
 	}
 }
 
@@ -168,9 +169,22 @@ func TestHandleSlashCommandModelShowsActiveRole(t *testing.T) {
 	newM, _ := m.handleSlashCommand("/model")
 	mm := newM.(*model)
 
-	content := mm.chatModel.Messages[0].content
-	if !strings.Contains(content, "(role: smol)") {
-		t.Errorf("expected active role indicator, got %q", content)
+	// Bare /model now opens a picker. The active role is still discoverable, as
+	// the row marker rather than as text in the transcript.
+	if mm.searchPopup == nil {
+		t.Fatal("bare /model did not open the model picker")
+	}
+	if mm.searchPopup.mode != searchModeModels {
+		t.Errorf("popup mode = %q, want %q", mm.searchPopup.mode, searchModeModels)
+	}
+	var active string
+	for _, item := range mm.searchPopup.entries {
+		if strings.Contains(item.Description, "· active") {
+			active = item.Text
+		}
+	}
+	if active != "smol" {
+		t.Errorf("active role marker on %q, want smol", active)
 	}
 }
 
@@ -1805,8 +1819,18 @@ func TestHandleSlashCommand_Model(t *testing.T) {
 	}
 	newM, _ := m.handleSlashCommand("/model")
 	mm := newM.(*model)
-	if !strings.Contains(mm.chatModel.Messages[0].content, "gpt-4o") {
-		t.Errorf("expected model name in output, got %q", mm.chatModel.Messages[0].content)
+	// Bare /model opens the picker, so the model name is now on a row.
+	if mm.searchPopup == nil {
+		t.Fatal("bare /model did not open the model picker")
+	}
+	found := false
+	for _, item := range mm.searchPopup.entries {
+		if strings.Contains(item.Description, "gpt-4o") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected gpt-4o among the picker rows: %+v", mm.searchPopup.entries)
 	}
 }
 
@@ -2218,5 +2242,184 @@ func runGit(t *testing.T, dir string, args ...string) {
 	cmd.Dir = dir
 	if err := cmd.Run(); err != nil {
 		t.Logf("git %v in %s: %v", args, dir, err)
+	}
+}
+
+// TestFilterSearch_NoMatchStaysEmpty guards the fallback that made the popup look
+// broken: filterSearch used to reset sp.filtered to the unfiltered entry list
+// whenever nothing matched. Typing a query with no hits silently redisplayed
+// every command, so the search appeared to ignore the query, and Enter then acted
+// on an entry the query had just excluded.
+func TestFilterSearch_NoMatchStaysEmpty(t *testing.T) {
+	sp := &searchPopupState{
+		mode: searchModeCommands,
+		entries: []SearchItem{
+			{Text: "/help", Description: "Show help"},
+			{Text: "/model", Description: "Show or switch model"},
+		},
+		search: "zzzznotacommand",
+	}
+	sp.filterSearch()
+
+	if len(sp.filtered) != 0 {
+		t.Fatalf("filterSearch kept %d entries for a query with no matches: %v", len(sp.filtered), sp.filtered)
+	}
+
+	// The popup must say so rather than render an item list.
+	m := &model{inputModel: NewInputModel(nil, nil, nil, ""), width: 80, height: 24}
+	m.searchPopup = sp
+	out := ansi.Strip(m.renderSearchPopup(70))
+	if !strings.Contains(out, "No matching") {
+		t.Errorf("popup did not report an empty result:\n%s", out)
+	}
+	if strings.Contains(out, "/help") {
+		t.Errorf("popup still lists an entry the query excluded:\n%s", out)
+	}
+}
+
+// TestFilterSearch_ClearingQueryRestoresAll pins the other half: an empty query
+// is not a failed query, it is no query, and it must restore the full list.
+func TestFilterSearch_ClearingQueryRestoresAll(t *testing.T) {
+	sp := &searchPopupState{
+		mode:    searchModeCommands,
+		entries: []SearchItem{{Text: "/help"}, {Text: "/model"}},
+		search:  "help",
+	}
+	sp.filterSearch()
+	if len(sp.filtered) != 1 {
+		t.Fatalf("filtered = %d, want 1", len(sp.filtered))
+	}
+	sp.search = ""
+	sp.filterSearch()
+	if len(sp.filtered) != 2 {
+		t.Errorf("clearing the query left %d entries, want all 2", len(sp.filtered))
+	}
+}
+
+// TestCtrlSStashesAndPopsDraft covers the draft stash round-trip. The subtle part
+// is that InputModel.Text is a mirror of an embedded textarea: a stash that
+// assigned Text directly would leave the textarea holding the old buffer, and the
+// next keystroke would sync that stale buffer back over the restored draft.
+func TestCtrlSStashesAndPopsDraft(t *testing.T) {
+	m := newTestModel(t)
+	ctrlS := makeKeyMod('s', tea.ModCtrl)
+
+	m.inputModel.SetText("first line\nsecond line")
+	m.handleKey(ctrlS)
+
+	if got := m.inputModel.Text; got != "" {
+		t.Fatalf("prompt not cleared after stash: %q", got)
+	}
+	if n := m.inputModel.StashCount(); n != 1 {
+		t.Fatalf("StashCount = %d, want 1", n)
+	}
+
+	// A second stash with an empty prompt must pop, not push an empty draft.
+	m.handleKey(ctrlS)
+	if got := m.inputModel.Text; got != "first line\nsecond line" {
+		t.Errorf("restored draft = %q, want the multi-line original", got)
+	}
+	if n := m.inputModel.StashCount(); n != 0 {
+		t.Errorf("StashCount = %d, want 0 after pop", n)
+	}
+
+	// The textarea must agree with the mirror, or the next key resurrects the
+	// stashed text. Typing one character proves the buffer the keystroke lands in.
+	m.handleKey(makeTextKey("X"))
+	if got := m.inputModel.Text; !strings.HasPrefix(got, "first line") {
+		t.Errorf("textarea lost the restored draft before typing: %q", got)
+	}
+}
+
+// TestCtrlSLIFOOrder pins the stack discipline: newest draft comes back first.
+func TestCtrlSLIFOOrder(t *testing.T) {
+	m := newTestModel(t)
+	ctrlS := makeKeyMod('s', tea.ModCtrl)
+
+	m.inputModel.SetText("older")
+	m.handleKey(ctrlS)
+	m.inputModel.SetText("newer")
+	m.handleKey(ctrlS)
+
+	m.handleKey(ctrlS)
+	if got := m.inputModel.Text; got != "newer" {
+		t.Errorf("first pop = %q, want %q", got, "newer")
+	}
+	m.handleKey(ctrlS)
+	if got := m.inputModel.Text; got != "older" {
+		t.Errorf("second pop = %q, want %q", got, "older")
+	}
+}
+
+// TestCtrlSOnEmptyWithEmptyStashIsInert checks the no-op case: it must not flash,
+// must not error, and must not disturb the prompt.
+func TestCtrlSOnEmptyWithEmptyStashIsInert(t *testing.T) {
+	m := newTestModel(t)
+	if _, cmd, handled := m.handleToggleKey(tea.Key{Code: 's', Mod: tea.ModCtrl}); !handled {
+		t.Fatal("Ctrl+S should be claimed even when there is nothing to stash")
+	} else if cmd != nil {
+		t.Error("Ctrl+S with nothing to stash or pop should not flash")
+	}
+	if m.inputModel.Text != "" {
+		t.Errorf("prompt changed on an inert Ctrl+S: %q", m.inputModel.Text)
+	}
+}
+
+// TestCtrlSStashesAfterEditingRestoredDraft pins the other side of the walk rule:
+// once the user edits a restored draft it is theirs again, so Ctrl+S must park it
+// rather than discarding the edit by popping over it.
+func TestCtrlSStashesAfterEditingRestoredDraft(t *testing.T) {
+	m := newTestModel(t)
+	ctrlS := makeKeyMod('s', tea.ModCtrl)
+
+	m.inputModel.SetText("parked")
+	m.handleKey(ctrlS)
+	m.handleKey(ctrlS) // restore
+	if got := m.inputModel.Text; got != "parked" {
+		t.Fatalf("restore = %q", got)
+	}
+
+	m.handleKey(makeTextKey("!"))
+	if got := m.inputModel.Text; !strings.Contains(got, "!") {
+		t.Fatalf("edit did not land: %q", got)
+	}
+	m.handleKey(ctrlS)
+	if got := m.inputModel.Text; got != "" {
+		t.Errorf("Ctrl+S after editing should park the edited draft, got prompt %q", got)
+	}
+	if n := m.inputModel.StashCount(); n != 1 {
+		t.Errorf("StashCount = %d, want 1", n)
+	}
+}
+
+// TestCtrlSInFrame checks the stash through a real frame, not just the model: the
+// flash has to reach the status bar and the draft has to leave the prompt, and the
+// frame has to stay width-exact (I1) through both transitions.
+func TestCtrlSInFrame(t *testing.T) {
+	m := newTestModel(t)
+	m.applyResize()
+	ctrlS := makeKeyMod('s', tea.ModCtrl)
+
+	m.inputModel.SetText("remember to run the linter")
+	m.handleKey(ctrlS)
+	m.syncPalette()
+	frame := ansi.Strip(m.View().Content)
+	if !strings.Contains(frame, "draft stashed") {
+		t.Error("stash flash did not reach the status bar")
+	}
+	if strings.Contains(frame, "remember to run the linter") {
+		t.Error("stashed draft is still in the prompt")
+	}
+
+	m.handleKey(ctrlS)
+	m.syncPalette()
+	frame = ansi.Strip(m.View().Content)
+	if !strings.Contains(frame, "draft restored") {
+		t.Error("restore flash did not reach the status bar")
+	}
+	for i, line := range strings.Split(frame, "\n") {
+		if got := ansi.StringWidth(line); got != m.width {
+			t.Fatalf("row %d width = %d, want %d after the stash round-trip", i, got, m.width)
+		}
 	}
 }
