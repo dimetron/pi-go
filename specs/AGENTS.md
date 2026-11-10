@@ -142,6 +142,9 @@ specs/
 | 000-rtk-hooks-optimizer/ | idea..summary | RTK output compactor hooks         |
 | 003-improvements/        | research      | Architecture and gap analysis docs |
 | 007-codex-context-compaction/ | research | Expose upstream Codex app-server context compaction through `internal/codex/` |
+| 008-short-context-discipline/ | readme+research | What arXiv:2611.05306 ("You don't need long context") implies for pi-go's compaction |
+| 009-upstream-pi-context-management/ | research | Upstream `pi` (`tmp/pi`) compaction vs pi-go: context_edit, reserve tokens, per-model overrides |
+| PLAN.md | plan | TUI improvements from OpenCode (`tmp/opencode`), reviewed against the code |
 
 ### tools/
 
