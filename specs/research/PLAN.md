@@ -71,10 +71,17 @@ fixed; the second is not.
 
 ### Mandatory non-regression invariants
 
-These are enforced by `internal/tui/render_integrity_test.go`. The prose version
-lives in `.agents/skills/tui-render-design/SKILL.md`, which is **gitignored** —
-treat the test as the authority, because that is what CI and every other clone
-can see.
+These are *not* all enforced by one file, which an earlier revision of this plan
+claimed. The prose version lives in `.agents/skills/tui-render-design/SKILL.md`,
+which is **gitignored** — it is not in a worktree and not in CI, so treat the
+tests as the authority. Checked per invariant:
+
+| Invariant | Enforced by |
+|---|---|
+| I1 (width) | `render_integrity_test.go` — `TestFrameIntegrityOnRealContent`, `TestChatOutputCannotTakeTheSidebarsColumns`, `TestExplorationFoldKeepsFrameIntegrity` |
+| I2 (one rail) | `minimap_test.go` — `TestRailIsContinuousAndSingleColumn`, `TestSidebarDrawsNoBorder` |
+| I5 (symmetric gaps) | `minimap_test.go` — `TestMessageBlockGapsAreSymmetric` |
+| I3, I4 | **no dedicated test.** Reviewed by eye; a regression shows up as an I1 width failure, which is too indirect to call a guard. |
 
 - **I1 — every row is exactly the terminal width.** `ansi.StringWidth(row) == m.width`.
   Cells, not bytes or runes; `💭` is one rune and two cells.
@@ -86,6 +93,9 @@ can see.
 - **I4 — reset before a boundary.** Emit `ansi.ResetStyle` before a column join
   so content cannot colour the divider.
 - **I5 — symmetric gaps**, from the Fibonacci ladder `1, 2, 3, 5, 8, 13, 21`.
+  The ladder is a **convention, not a constant**: no such slice or helper exists
+  in the code. Gaps are literals in that range, and the only assertion is that
+  the message block has one blank row above and one below.
 - **TUI output safety** (`AGENTS.md`): never write to `os.Stdout`/`os.Stderr`
   while the TUI is active; route diagnostics through the session logger.
 
@@ -435,7 +445,9 @@ while mutations and failures stay prominent.
    alone — a summary plus a count costs more than the card. The run ends at any
    non-read card, a pending card (`toolPending()`), or a failure
    (`isFailedToolResult`, which reads the JSON `error`/`exit_code` markers that
-   tool results actually carry).
+   tool results actually carry — but that is the second line of defence:
+   `foldableExploration` also rejects `msg.isError` before it ever gets there, and
+   requires `toolBlockKind(msg.tool) == blockRead`.)
 4. ✅ A finished thinking block collapses to
    `  ▸ Thought · <first non-blank line, 60 cols> (N lines)` in `Smart` and
    `Compact`; `Expanded` keeps the six-line window, and a live block

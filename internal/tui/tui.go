@@ -1569,8 +1569,8 @@ func (m *model) handleBranchPopupKey(key tea.Key) (tea.Model, tea.Cmd, bool) {
 }
 
 // escArmWindow is how long the first Esc's interrupt confirmation stays armed.
-// The value matches Ctrl+C's reset window (resetCtrlCCount's 2s) plus a margin,
-// because the two confirmations are the same gesture twice and a user should not
+// The value is exactly Ctrl+C's reset window (resetCtrlCCount's 2s), with no
+// margin: the two confirmations are the same gesture twice, and a user should not
 // have to learn two different rhythms for them.
 const escArmWindow = 2 * time.Second
 
