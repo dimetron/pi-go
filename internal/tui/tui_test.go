@@ -133,21 +133,22 @@ func TestHandleSlashCommandModelShowsRoles(t *testing.T) {
 	newM, _ := m.handleSlashCommand("/model")
 	mm := newM.(*model)
 
-	if len(mm.chatModel.Messages) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(mm.chatModel.Messages))
+	// Bare /model opens the picker; every configured role is a row, with its
+	// model and provider annotation.
+	if mm.searchPopup == nil {
+		t.Fatal("bare /model did not open the model picker")
 	}
-	content := mm.chatModel.Messages[0].content
-	if !strings.Contains(content, "Configured roles:") {
-		t.Errorf("expected roles section, got %q", content)
+	rows := map[string]string{}
+	for _, item := range mm.searchPopup.entries {
+		rows[item.Text] = item.Description
 	}
-	if !strings.Contains(content, "smol") {
-		t.Errorf("expected smol role listed, got %q", content)
+	for _, role := range []string{"default", "smol", "slow"} {
+		if _, ok := rows[role]; !ok {
+			t.Errorf("role %q missing from the picker: %v", role, rows)
+		}
 	}
-	if !strings.Contains(content, "slow") {
-		t.Errorf("expected slow role listed, got %q", content)
-	}
-	if !strings.Contains(content, "[anthropic]") {
-		t.Errorf("expected provider annotation for slow role, got %q", content)
+	if got := rows["slow"]; !strings.Contains(got, "anthropic") {
+		t.Errorf("slow row = %q, want the provider annotation", got)
 	}
 }
 
@@ -168,9 +169,22 @@ func TestHandleSlashCommandModelShowsActiveRole(t *testing.T) {
 	newM, _ := m.handleSlashCommand("/model")
 	mm := newM.(*model)
 
-	content := mm.chatModel.Messages[0].content
-	if !strings.Contains(content, "(role: smol)") {
-		t.Errorf("expected active role indicator, got %q", content)
+	// Bare /model now opens a picker. The active role is still discoverable, as
+	// the row marker rather than as text in the transcript.
+	if mm.searchPopup == nil {
+		t.Fatal("bare /model did not open the model picker")
+	}
+	if mm.searchPopup.mode != searchModeModels {
+		t.Errorf("popup mode = %q, want %q", mm.searchPopup.mode, searchModeModels)
+	}
+	var active string
+	for _, item := range mm.searchPopup.entries {
+		if strings.Contains(item.Description, "· active") {
+			active = item.Text
+		}
+	}
+	if active != "smol" {
+		t.Errorf("active role marker on %q, want smol", active)
 	}
 }
 
@@ -1805,8 +1819,18 @@ func TestHandleSlashCommand_Model(t *testing.T) {
 	}
 	newM, _ := m.handleSlashCommand("/model")
 	mm := newM.(*model)
-	if !strings.Contains(mm.chatModel.Messages[0].content, "gpt-4o") {
-		t.Errorf("expected model name in output, got %q", mm.chatModel.Messages[0].content)
+	// Bare /model opens the picker, so the model name is now on a row.
+	if mm.searchPopup == nil {
+		t.Fatal("bare /model did not open the model picker")
+	}
+	found := false
+	for _, item := range mm.searchPopup.entries {
+		if strings.Contains(item.Description, "gpt-4o") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected gpt-4o among the picker rows: %+v", mm.searchPopup.entries)
 	}
 }
 

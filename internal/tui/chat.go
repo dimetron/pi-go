@@ -749,12 +749,30 @@ func (c *ChatModel) RenderMessages(running bool) string {
 // lines it opened, and collapseBlankLines then drops entries from both together,
 // so kinds[i] always describes the i-th line of the returned string.
 func (c *ChatModel) renderMessages(running bool) (string, []blockKind) {
+	text, kinds, _ := c.renderMessagesWithOffsets(running)
+	return text, kinds
+}
+
+// renderMessagesWithOffsets renders the chat and also reports where each message
+// starts, so a jump to "message 12" can be turned into a scroll offset.
+//
+// offsets has len(Messages)+1 entries: offsets[i] is the first line of message i
+// in the returned string, and the final entry is one past the last line. It is
+// the last message's end rather than a copy of its start, which is what lets a
+// caller compute a height by subtraction without special-casing the tail.
+//
+// A folded exploration run or a collapsed thinking block still claims every
+// message it covers: the run's lines are attributed to the first message of the
+// run and the rest map to that same start line. Pointing a later member of the
+// group at its own (unrendered) line would scroll the user into the middle of
+// the group's single row or past the end.
+func (c *ChatModel) renderMessagesWithOffsets(running bool) (string, []blockKind, []int) {
 	p := paletteOrDark(c.Palette)
 	themeKey := paletteKey(p)
 
 	if len(c.Messages) == 0 {
 		welcome := c.renderWelcome(p)
-		return welcome, make([]blockKind, strings.Count(welcome, "\n")+1)
+		return welcome, make([]blockKind, strings.Count(welcome, "\n")+1), []int{0}
 	}
 
 	dim := lipgloss.NewStyle().Foreground(p.Dim)
@@ -767,8 +785,13 @@ func (c *ChatModel) renderMessages(running bool) (string, []blockKind) {
 
 	var b strings.Builder
 	var kinds []blockKind
+	offsets := make([]int, len(c.Messages)+1)
+	// Line count emitted so far, kept separately from strings.Count(b.String())
+	// because that would make this quadratic over a long conversation.
+	lineCount := 0
 	lastIdx := len(c.Messages) - 1
 	for i := 0; i < len(c.Messages); {
+		offsets[i] = lineCount
 		msg := &c.Messages[i]
 
 		// A contiguous run of finished, error-free exploration folds into one
@@ -784,6 +807,12 @@ func (c *ChatModel) renderMessages(running bool) (string, []blockKind) {
 			// the messages before this group must survive, or the minimap loses its
 			// place in the conversation.
 			kinds = appendKind(kinds, blockRead, strings.Count(rendered, "\n")+1)
+			lineCount += strings.Count(rendered, "\n") + 1
+			for j := 1; j < len(run); j++ {
+				// Every member of the folded run points at the single row the
+				// group rendered, not at a line that does not exist.
+				offsets[i+j] = offsets[i]
+			}
 			i += len(run)
 			continue
 		}
@@ -793,6 +822,7 @@ func (c *ChatModel) renderMessages(running bool) (string, []blockKind) {
 		if msg.renderCached && msg.renderCacheKey == key {
 			b.WriteString(msg.renderCache)
 			kinds = appendKind(kinds, kindOf(msg), strings.Count(msg.renderCache, "\n"))
+			lineCount += strings.Count(msg.renderCache, "\n")
 			i++
 			continue
 		}
@@ -800,6 +830,7 @@ func (c *ChatModel) renderMessages(running bool) (string, []blockKind) {
 		rendered := c.renderMessageBlock(msg, p, bullet, separator, i > 0, isLastAndStreaming)
 		b.WriteString(rendered)
 		kinds = appendKind(kinds, kindOf(msg), strings.Count(rendered, "\n"))
+		lineCount += strings.Count(rendered, "\n")
 
 		// Cache unconditionally: correctness comes from the key, not from
 		// guessing which messages are still in flux. The streaming message
@@ -813,8 +844,24 @@ func (c *ChatModel) renderMessages(running bool) (string, []blockKind) {
 	// Subagent blocks, assistant markdown, and tool transitions each emit
 	// their own surrounding "\n", and they compound to runs of 2-3 blank
 	// lines between blocks — visually noisy when several subagents run in
+	//
+	// The sentinel is the line count before the collapse. lineCount has been
+	// accumulating newlines, and a text of N newlines has N+1 lines, so the
+	// one-past-the-end index is lineCount+1 — which is also exactly the last
+	// entry collapseBlankLinesMapped emits.
+	offsets[len(c.Messages)] = lineCount + 1
+
 	// parallel. Collapse to at most one blank line between content.
-	return collapseBlankLines(b.String(), kinds)
+	text, kinds, lineMap := collapseBlankLinesMapped(b.String(), kinds)
+	// Carry each message start across the collapse with the map, so a jump lands
+	// on the message rather than near where it used to be.
+	for i := range offsets {
+		if offsets[i] >= len(lineMap) {
+			offsets[i] = len(lineMap) - 1
+		}
+		offsets[i] = lineMap[offsets[i]]
+	}
+	return text, kinds, offsets
 }
 
 // renderWrapWidth returns the width available to content indented by reserve
@@ -1037,8 +1084,21 @@ func appendKind(kinds []blockKind, kind blockKind, n int) []blockKind {
 // A nil or short kinds is padded, so callers that only want the text can pass
 // nil and ignore the second result.
 func collapseBlankLines(s string, kinds []blockKind) (string, []blockKind) {
+	text, k, _ := collapseBlankLinesMapped(s, kinds)
+	return text, k
+}
+
+// collapseBlankLinesMapped is collapseBlankLines plus the line mapping callers
+// need to address a line by its pre-collapse index.
+//
+// lineMap has len(lines)+1 entries: lineMap[i] is where pre-collapse line i
+// landed. Entries for dropped lines point at the line that replaced them, and
+// the final entry is len(out), so a caller that holds an offset into the
+// uncollapsed text can carry it across exactly rather than by guessing how many
+// lines went away.
+func collapseBlankLinesMapped(s string, kinds []blockKind) (string, []blockKind, []int) {
 	if s == "" {
-		return s, nil
+		return s, nil, []int{0}
 	}
 	lines := strings.Split(s, "\n")
 
@@ -1050,22 +1110,32 @@ func collapseBlankLines(s string, kinds []blockKind) (string, []blockKind) {
 
 	out := make([]string, 0, len(lines))
 	outKinds := make([]blockKind, 0, len(lines))
+	lineMap := make([]int, len(lines)+1)
 	prevBlank := false
 	for i, line := range lines {
 		if blankFast(line) {
 			if prevBlank {
+				// Dropped: it addresses the previous surviving line, so a jump to
+				// a collapsed blank line lands on the content just above it.
+				lineMap[i] = len(out) - 1
+				if lineMap[i] < 0 {
+					lineMap[i] = 0
+				}
 				continue
 			}
 			prevBlank = true
+			lineMap[i] = len(out)
 			out = append(out, "")
 			outKinds = append(outKinds, blockNone)
 			continue
 		}
 		prevBlank = false
+		lineMap[i] = len(out)
 		out = append(out, line)
 		outKinds = append(outKinds, kinds[i])
 	}
-	return strings.Join(out, "\n"), outKinds
+	lineMap[len(lines)] = len(out)
+	return strings.Join(out, "\n"), outKinds, lineMap
 }
 
 // countByRole counts messages with the given role.

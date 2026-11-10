@@ -127,6 +127,7 @@ var slashCommandSpecs = []slashCommandSpec{
 	{name: "/skill-load", desc: "Reload skills from disk", hidden: true, run: slashCmdBare((*model).handleSkillLoadCommand)},
 	{name: "/skill-create", desc: "Create a new skill", hidden: true, run: (*model).handleSkillCreateCommand},
 	{name: "/theme", desc: "Switch theme or list themes", run: (*model).handleThemeCommand},
+	{name: "/timeline", desc: "Jump to a previous turn", run: slashCmdVoid((*model).handleTimelineCommand)},
 	{name: "/ping", desc: "Test LLM connectivity", run: (*model).handlePingCommand},
 	{name: "/model-price-refresh", desc: "Refresh model prices from models.dev", run: (*model).handleModelPriceRefreshCommand},
 	{name: "/rtk", desc: "Output compaction stats", run: slashCmdArgs((*model).handleRTKCommand)},
@@ -529,15 +530,35 @@ func (m *model) formatModelInfo() string {
 //   - /model <name>    — switch to the named model (or role if name matches a role)
 func (m *model) handleModelCommand(args []string) (tea.Model, tea.Cmd) {
 	if len(args) == 0 {
-		m.chatModel.Messages = append(m.chatModel.Messages, message{
-			role:    "assistant",
-			content: m.formatModelInfo(),
-		})
+		// A second bare /model closes the picker, matching /theme and /subagents.
+		if m.searchPopup != nil && m.searchPopup.mode == searchModeModels {
+			m.searchPopup = nil
+			return m, nil
+		}
+		// With no configured roles there is nothing to pick from, so fall back
+		// to the informational text rather than opening an empty popup.
+		if len(modelSearchItems(m.cfg)) == 0 {
+			m.chatModel.Messages = append(m.chatModel.Messages, message{
+				role:    "assistant",
+				content: m.formatModelInfo(),
+			})
+			return m, nil
+		}
+		m.newSearchPopup(searchModeModels)
 		return m, nil
 	}
 
-	target := strings.TrimSpace(args[0])
+	m.switchModelTarget(strings.TrimSpace(args[0]))
+	return m, nil
+}
 
+// switchModelTarget switches to a model or configured role and reports the
+// outcome as a chat message.
+//
+// It is separate from handleModelCommand because the picker has to reach the
+// same path: a row accepts a target, and duplicating the resolve-switch-rebuild
+// sequence in the popup would let the two drift on which failures are quiet.
+func (m *model) switchModelTarget(target string) {
 	// Resolve: if target is a configured role name, use that role's model.
 	var modelName, roleName string
 	if rc, ok := m.cfg.Roles[target]; ok {
@@ -552,7 +573,7 @@ func (m *model) handleModelCommand(args []string) (tea.Model, tea.Cmd) {
 			role:    "assistant",
 			content: fmt.Sprintf("Role `%s` has no model configured.", target),
 		})
-		return m, nil
+		return
 	}
 
 	if m.cfg.ModelSwitcher == nil {
@@ -560,7 +581,7 @@ func (m *model) handleModelCommand(args []string) (tea.Model, tea.Cmd) {
 			role:    "assistant",
 			content: "Model switching is not available in this context.",
 		})
-		return m, nil
+		return
 	}
 
 	if m.running {
@@ -568,7 +589,7 @@ func (m *model) handleModelCommand(args []string) (tea.Model, tea.Cmd) {
 			role:    "assistant",
 			content: "Cannot switch model while a response is running. Wait for it to finish or cancel it first.",
 		})
-		return m, nil
+		return
 	}
 
 	newLLM, newName, newProvider, err := m.cfg.ModelSwitcher(m.ctx, modelName)
@@ -577,7 +598,7 @@ func (m *model) handleModelCommand(args []string) (tea.Model, tea.Cmd) {
 			role:    "assistant",
 			content: fmt.Sprintf("Failed to switch model: %s", err),
 		})
-		return m, nil
+		return
 	}
 
 	// Rebuild the agent with the new LLM.
@@ -587,7 +608,7 @@ func (m *model) handleModelCommand(args []string) (tea.Model, tea.Cmd) {
 				role:    "assistant",
 				content: fmt.Sprintf("Failed to rebuild agent: %s", err),
 			})
-			return m, nil
+			return
 		}
 	}
 
@@ -612,7 +633,6 @@ func (m *model) handleModelCommand(args []string) (tea.Model, tea.Cmd) {
 		role:    "assistant",
 		content: sb.String(),
 	})
-	return m, nil
 }
 
 // saveModelToConfig persists the model and provider as the default role in
@@ -1070,6 +1090,23 @@ func formatThemeError(name string, matches []string) string {
 		msg += " Did you mean: " + strings.Join(matches, ", ") + "?"
 	}
 	return msg
+}
+
+// handleTimelineCommand opens the turn picker, or closes it on a second call.
+//
+// It is deliberately not a Ctrl chord: Ctrl+T is the textarea's
+// transpose-character binding, and rebinding it would take away an editing key
+// to add a navigation one.
+func (m *model) handleTimelineCommand() {
+	if m.searchPopup != nil && m.searchPopup.mode == searchModeTimeline {
+		m.searchPopup = nil
+		return
+	}
+	if len(timelineSearchItems(m.chatModel.Messages)) == 0 {
+		m.setFlash("no turns yet")
+		return
+	}
+	m.newSearchPopup(searchModeTimeline)
 }
 
 // handleThemeCommand handles /theme: list themes, switch theme, or show current.

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -55,6 +56,16 @@ type model struct {
 	// either the reply to RequestBackgroundColor arrived, or the user picked a
 	// theme explicitly. Detection never overrides an explicit choice.
 	bgDetected bool
+
+	// msgLineOffsets maps a message index to the first line it occupies in the
+	// last rendered transcript, with a trailing entry one past the end. View
+	// refreshes it each frame; /timeline reads it to turn a chosen turn into a
+	// scroll offset.
+	//
+	// It is a sidecar rather than a return value of ChatModel.renderMessages
+	// because nearly every existing caller wants only the text, and threading a
+	// fourth return through all of them would be noise for one consumer.
+	msgLineOffsets []int
 
 	// Active /plan worktree. Planning artifacts remain isolated until the
 	// planner completes, then the branch is merged and the backup ref retained.
@@ -345,6 +356,8 @@ const (
 	searchModeHistory  searchMode = "history"
 	searchModeAgents   searchMode = "agents"
 	searchModeThemes   searchMode = "themes"
+	searchModeModels   searchMode = "models"
+	searchModeTimeline searchMode = "timeline"
 )
 
 // SearchItem represents an item in the search popup (command, history entry, or
@@ -360,6 +373,10 @@ type SearchItem struct {
 	// orchestrator refuses a non-running agent, so the picker gates the key on
 	// this rather than surfacing that refusal as an error.
 	Running bool
+	// MessageIdx is the index into ChatModel.Messages a row jumps to. Only the
+	// timeline sets it; the row text is a turn number, and this is what that
+	// number means.
+	MessageIdx int
 	// Icon is a leading glyph for rows whose meaning is visual rather than
 	// textual — a theme's light/dark variant. Empty rows get the plain prefix.
 	Icon string
@@ -446,6 +463,18 @@ func (m *model) newSearchPopup(mode searchMode) {
 			return
 		}
 
+	case searchModeModels:
+		items = modelSearchItems(m.cfg)
+		if len(items) == 0 {
+			return
+		}
+
+	case searchModeTimeline:
+		items = timelineSearchItems(m.chatModel.Messages)
+		if len(items) == 0 {
+			return
+		}
+
 	case searchModeThemes:
 		if m.themeManager == nil {
 			return
@@ -493,6 +522,104 @@ func (m *model) newSearchPopup(mode searchMode) {
 		}
 		m.previewThemeSelection()
 	}
+}
+
+// timelineSearchItems builds the /timeline rows: one per user turn, numbered,
+// with a preview of the prompt.
+//
+// The row text is the turn number rather than the prompt, because accepting a
+// row has to identify a message. The prompt is the description, which is what a
+// user recognizes but cannot be used as a key.
+func timelineSearchItems(msgs []message) []SearchItem {
+	var items []SearchItem
+	turn := 0
+	for i := range msgs {
+		if msgs[i].role != "user" {
+			continue
+		}
+		turn++
+		preview := strings.TrimSpace(msgs[i].content)
+		if line := strings.IndexByte(preview, '\n'); line >= 0 {
+			preview = preview[:line]
+		}
+		items = append(items, SearchItem{
+			Text:        strconv.Itoa(turn),
+			Description: clipRunes(preview, 60),
+			MessageIdx:  i,
+		})
+	}
+	return items
+}
+
+// jumpToMessage scrolls the transcript so the given message's first line is at
+// the top of the viewport.
+//
+// Scroll counts from the bottom, so the offset is "how many lines follow the
+// message's start". The offsets come from the last frame's render; a jump before
+// any frame has been composed falls back to no movement rather than guessing.
+func (m *model) jumpToMessage(idx int) {
+	if idx < 0 || idx+1 >= len(m.msgLineOffsets) {
+		return
+	}
+	totalLines := m.msgLineOffsets[len(m.msgLineOffsets)-1]
+	if totalLines <= 0 {
+		return
+	}
+	start := m.msgLineOffsets[idx]
+	available := m.messageViewportHeight()
+	// Leave the message's first line at the top: everything after it is still
+	// below the viewport, which is what "jump to this turn" means.
+	//
+	// No upper clamp is needed. start is never negative, so the result cannot
+	// exceed totalLines-available, which is exactly the largest offset
+	// clipMessagesToViewport can scroll to. MaxScroll is deliberately not used
+	// here: it takes the terminal height and subtracts its own chrome, so passing
+	// it the already-reduced viewport height double-counted the chrome and clamped
+	// every jump short of its target.
+	scroll := totalLines - start - available
+	if scroll < 0 {
+		scroll = 0
+	}
+	m.chatModel.Scroll = scroll
+}
+
+// modelSearchItems builds the model picker rows from the configured roles.
+//
+// Roles, not a provider model list: a role is the thing the rest of the app
+// resolves a model through, so switching a role is switchable through the
+// existing path with no new plumbing. Listing a provider's catalog here would
+// offer models that no configured role or provider credentials can reach.
+//
+// The row text is the role name, which is exactly what switchModelTarget
+// accepts, so accepting a row and typing "/model <row>" take the same code path.
+func modelSearchItems(cfg Config) []SearchItem {
+	names := make([]string, 0, len(cfg.Roles))
+	for name := range cfg.Roles {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	items := make([]SearchItem, 0, len(names))
+	for _, name := range names {
+		rc := cfg.Roles[name]
+		if rc.Model == "" {
+			// A role with no model has nothing to switch to; offering it would
+			// produce a "role has no model configured" dead end.
+			continue
+		}
+		var desc strings.Builder
+		desc.WriteString(rc.Model)
+		if rc.Provider != "" {
+			fmt.Fprintf(&desc, " · %s", rc.Provider)
+		}
+		// The marker the /model text uses: the active role, or the default one
+		// when no explicit role is configured.
+		if name == cfg.ActiveRole || (cfg.ActiveRole == "" && name == "default") {
+			desc.WriteString(" · active")
+		}
+		items = append(items, SearchItem{Text: name, Description: desc.String()})
+	}
+	return items
 }
 
 // previewThemeSelection applies the highlighted theme so moving through the
@@ -1802,6 +1929,12 @@ func (m *model) acceptSearchPopupSelection() {
 		m.searchPopup = nil
 	case searchModeThemes:
 		m.commitThemeSelection()
+	case searchModeModels:
+		m.searchPopup = nil
+		m.switchModelTarget(item.Text)
+	case searchModeTimeline:
+		m.searchPopup = nil
+		m.jumpToMessage(item.MessageIdx)
 	}
 }
 
@@ -1830,7 +1963,8 @@ func (m *model) View() tea.View {
 
 	// Render components.
 	m.inputModel.SetWidth(max(0, m.width-3))
-	messagesView, lineKinds := m.chatModel.renderMessages(m.running)
+	messagesView, lineKinds, lineOffsets := m.chatModel.renderMessagesWithOffsets(m.running)
+	m.msgLineOffsets = lineOffsets
 	statusBar := m.statusModel.Render(m.statusRenderInput())
 	inputArea := m.inputModel.View(m.loading)
 	var inputCursor *tea.Cursor
@@ -2858,6 +2992,10 @@ func (m *model) renderSearchPopup(width int) string {
 			b.WriteString(st.searchStyle.Width(width).Render("  No matching subagents"))
 		case searchModeThemes:
 			b.WriteString(st.searchStyle.Width(width).Render("  No matching themes"))
+		case searchModeModels:
+			b.WriteString(st.searchStyle.Width(width).Render("  No matching models"))
+		case searchModeTimeline:
+			b.WriteString(st.searchStyle.Width(width).Render("  No matching turns"))
 		default:
 			b.WriteString(st.searchStyle.Width(width).Render("  No matching history"))
 		}
@@ -2912,6 +3050,14 @@ func (m *model) searchPopupStyles(mode searchMode, width int) searchPopupStyleSe
 		accent = m.palette.Yellow
 		st.itemStyle = st.itemStyle.Foreground(m.palette.Yellow)
 		st.header = "Themes"
+	case searchModeModels:
+		accent = m.palette.Green
+		st.itemStyle = st.itemStyle.Foreground(m.palette.Green)
+		st.header = "Models"
+	case searchModeTimeline:
+		accent = m.palette.Blue
+		st.itemStyle = st.itemStyle.Foreground(m.palette.Blue)
+		st.header = "Timeline"
 	default:
 		return st
 	}
