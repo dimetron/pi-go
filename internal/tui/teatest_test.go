@@ -583,8 +583,19 @@ func TestHandleKey_Esc_CancelRunning(t *testing.T) {
 	m.running = true
 	m.agentCh = make(chan agentMsg, 1)
 	m.handleKey(makeKey(tea.KeyEsc))
+	if !m.running {
+		t.Fatal("a single Esc must arm, not interrupt: Esc is also how a user backs out of a popup")
+	}
+	if m.escArmedUntil.IsZero() {
+		t.Error("expected the first Esc to arm the interrupt confirmation")
+	}
+	// The second press, inside the window, is the one that interrupts.
+	m.handleKey(makeKey(tea.KeyEsc))
 	if m.running {
-		t.Error("expected running=false after Esc")
+		t.Error("expected running=false after the second Esc")
+	}
+	if !m.escArmedUntil.IsZero() {
+		t.Error("expected the armed state to be cleared once the interrupt fired")
 	}
 }
 

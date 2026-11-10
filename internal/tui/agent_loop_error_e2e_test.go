@@ -119,7 +119,7 @@ func TestChatRender_ErrorMessageIsDistinct(t *testing.T) {
 	plain := message{role: "assistant", content: "boom"}
 	errMsg := message{role: "assistant", content: "boom", isError: true}
 
-	if plain.renderKey(80, false, false, false, 0, false) == errMsg.renderKey(80, false, false, false, 0, false) {
+	if plain.renderKey(80, false, false, false, 0, false, VerbositySmart) == errMsg.renderKey(80, false, false, false, 0, false, VerbositySmart) {
 		t.Fatal("renderKey collides for plain and error messages -- cached render would leak")
 	}
 

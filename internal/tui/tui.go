@@ -96,6 +96,17 @@ type model struct {
 	lastMentions     []string
 	lastPromptFailed bool
 
+	// expandedAgent is the subagent whose card shows its full event stream, empty
+	// when every card uses the normal window. At most one at a time.
+	expandedAgent string
+
+	// escArmedUntil is when the first Esc's interrupt confirmation expires. A
+	// deadline rather than the time of the last press: the rule is "a second Esc
+	// within escArmWindow", and comparing against an absolute instant makes that
+	// readable at the call site instead of requiring the reader to do the
+	// subtraction. Zero means no pending confirmation.
+	escArmedUntil time.Time
+
 	// Agent face renderer with mood expressions.
 	face *FaceRenderer
 
@@ -301,7 +312,7 @@ func listGitBranches(workDir string) []string {
 // searchPopupState is a unified search window for slash commands and history.
 // The mode determines what items are shown and how they are selected.
 type searchPopupState struct {
-	mode      searchMode   // "commands" or "history"
+	mode      searchMode   // "commands", "history", or "agents"
 	entries   []SearchItem // all items (commands or history entries)
 	filtered  []SearchItem // filtered by search query
 	selected  int          // currently selected index in filtered list
@@ -316,12 +327,22 @@ type searchMode string
 const (
 	searchModeCommands searchMode = "commands"
 	searchModeHistory  searchMode = "history"
+	searchModeAgents   searchMode = "agents"
 )
 
-// SearchItem represents an item in the search popup (command or history entry).
+// SearchItem represents an item in the search popup (command, history entry, or
+// subagent).
 type SearchItem struct {
-	Text        string // the command or history text
-	Description string // for commands: the description
+	Text        string // the command, history text, or agent title
+	Description string // for commands: the description; for agents: status/duration
+	// AgentID is set for subagent rows only. It is what makes a row actionable:
+	// accepting one expands that agent's card, and Ctrl+X cancels that agent by
+	// ID rather than by whatever happens to be selected in the orchestrator.
+	AgentID string
+	// Running marks a subagent row whose agent can still be canceled. The
+	// orchestrator refuses a non-running agent, so the picker gates the key on
+	// this rather than surfacing that refusal as an error.
+	Running bool
 }
 
 // searchPopupChrome is the number of rows the search popup reserves for chrome
@@ -394,6 +415,15 @@ func (m *model) newSearchPopup(mode searchMode) {
 		items = make([]SearchItem, len(entries))
 		for i, e := range entries {
 			items[len(entries)-1-i] = SearchItem{Text: e.Text}
+		}
+
+	case searchModeAgents:
+		if m.cfg.Orchestrator == nil {
+			return
+		}
+		items = agentSearchItems(m.cfg.Orchestrator.List())
+		if len(items) == 0 {
+			return
 		}
 	}
 
@@ -473,6 +503,15 @@ func (m *model) allSearchCandidates() []CompletionCandidate {
 }
 
 // filterSearch filters items by search query (case-insensitive substring on Text).
+// filterSearch narrows entries by the current query.
+//
+// An empty result stays empty. It used to fall back to sp.entries when nothing
+// matched, on the reasoning that an empty popup is worse than an unfiltered one.
+// That made the popup look broken in the other direction: typing a query with no
+// hits silently redisplayed every entry, so the search appeared to ignore what
+// was typed, and Enter then acted on an entry the query had excluded. Callers
+// already render an explicit "No matching …" row for len(filtered) == 0, so the
+// honest empty list is also the one the UI was built for.
 func (sp *searchPopupState) filterSearch() {
 	if sp.search == "" {
 		sp.filtered = sp.entries
@@ -486,9 +525,6 @@ func (sp *searchPopupState) filterSearch() {
 		if strings.Contains(strings.ToLower(e.Text), q) || strings.Contains(strings.ToLower(e.Description), q) {
 			filtered = append(filtered, e)
 		}
-	}
-	if filtered == nil {
-		filtered = sp.entries // show all if no matches
 	}
 	sp.filtered = filtered
 	sp.selected = 0
@@ -507,6 +543,10 @@ func (m *model) syncPalette() {
 	}
 	m.chatModel.Palette = m.palette
 	m.chatModel.ToolDisplay.Palette = m.palette
+	// Expanded agent selection is read by the card renderer, so it is published
+	// here with the rest of the per-frame render inputs rather than reached for
+	// from inside the renderer.
+	m.chatModel.ToolDisplay.ExpandedAgentID = m.expandedAgent
 	m.inputModel.Palette = m.palette
 	m.matrix.palette = m.palette
 }
@@ -1273,8 +1313,22 @@ func (m *model) handleBranchPopupKey(key tea.Key) (tea.Model, tea.Cmd, bool) {
 	return m, nil, true
 }
 
+// escArmWindow is how long the first Esc's interrupt confirmation stays armed.
+// The value matches Ctrl+C's reset window (resetCtrlCCount's 2s) plus a margin,
+// because the two confirmations are the same gesture twice and a user should not
+// have to learn two different rhythms for them.
+const escArmWindow = 2 * time.Second
+
 // handleInterruptKey handles the keys that stay live while the agent runs:
-// Esc to dismiss or cancel, Ctrl+C to cancel then quit, and F12 as a no-op.
+// Esc to dismiss a popup or interrupt, Ctrl+C to cancel then quit, and F12 as a
+// no-op.
+//
+// Esc while a turn is running is armed, not immediate. Esc is also how a user
+// backs out of a popup, clears a transient state, or simply changes their mind,
+// and a stray press during a long turn used to throw away minutes of work with no
+// undo — the turn's transcript survives, but the turn itself is gone. The first
+// press therefore buys confirmation (the same shape Ctrl+C has used for quitting)
+// and the second, within escArmWindow, interrupts.
 func (m *model) handleInterruptKey(key tea.Key) (tea.Model, tea.Cmd, bool) {
 	switch {
 	case key.Code == tea.KeyEsc:
@@ -1282,10 +1336,17 @@ func (m *model) handleInterruptKey(key tea.Key) (tea.Model, tea.Cmd, bool) {
 			m.searchPopup = nil
 			return m, nil, true
 		}
-		if m.running {
+		if !m.running {
+			return m, nil, true
+		}
+		if now := time.Now(); !m.escArmedUntil.IsZero() && now.Before(m.escArmedUntil) {
+			m.escArmedUntil = time.Time{}
 			return m, m.cancelAgent(), true
 		}
-		return m, nil, true
+		// First press: arm, and say so. The flash carries no cancel command, so a
+		// user who expected an immediate interrupt sees why nothing happened.
+		m.escArmedUntil = time.Now().Add(escArmWindow)
+		return m, m.setFlash("esc again to interrupt"), true
 
 	case key.Code == 'c' && key.Mod == tea.ModCtrl:
 		if m.running {
@@ -1320,9 +1381,54 @@ func (m *model) handleToggleKey(key tea.Key) (tea.Model, tea.Cmd, bool) {
 		return model, cmd, true
 	}
 
-	// Ctrl+O: toggle compact/expanded tool output.
+	// Ctrl+O: cycle tool verbosity — smart → expanded → compact → smart.
+	//
+	// Smart is the default and the only mode that folds; expanded shows every card
+	// in full; compact one-lines every card. CompactTools is derived from the mode
+	// rather than toggled independently, so the flash and the rendering cannot
+	// disagree about which state the user is in.
 	if key.Code == 'o' && key.Mod == tea.ModCtrl {
-		m.chatModel.ToolDisplay.CompactTools = !m.chatModel.ToolDisplay.CompactTools
+		m.chatModel.ToolDisplay.Verbosity = m.chatModel.ToolDisplay.Verbosity.next()
+		m.chatModel.ToolDisplay.CompactTools = m.chatModel.ToolDisplay.Verbosity == VerbosityCompact
+		// Every card's rendering depends on the mode, and the per-message cache
+		// keys on CompactTools — which does not change between smart and expanded,
+		// so the caches have to be dropped explicitly when the fold state moves.
+		m.chatModel.invalidateRenderCaches()
+		return m, m.setFlash("tools: " + m.chatModel.ToolDisplay.Verbosity.String()), true
+	}
+
+	// Ctrl+X: cancel the subagent selected in the agents picker.
+	//
+	// It is handled here rather than in handleSearchPopupKey because canceling
+	// produces a command (the flash) and that helper returns only a bool. The key
+	// is left alone in every other popup mode: Ctrl+X must not be swallowed as
+	// search text there, and there is nothing for it to act on.
+	if key.Code == 'x' && key.Mod == tea.ModCtrl {
+		if m.searchPopup != nil && m.searchPopup.mode == searchModeAgents {
+			return m, m.cancelSelectedAgent(), true
+		}
+		return nil, nil, false
+	}
+
+	// Ctrl+S: park the draft, or walk down the parked drafts.
+	//
+	// Ctrl+S is unbound in the textarea keymap (unlike Ctrl+T, which transposes a
+	// character), so it is free for this. The rule is: park what the user typed,
+	// and only start popping once there is nothing of their own in the prompt —
+	// either because it is empty or because it holds the draft Ctrl+S just handed
+	// them. Keying the pop on "empty" alone made the stash unwalkable: a restore
+	// leaves the prompt non-empty, so the next press put that same draft back on
+	// top of the stack and the entry underneath was unreachable.
+	if key.Code == 's' && key.Mod == tea.ModCtrl {
+		if m.inputModel.Text == "" || m.inputModel.StashRestored() {
+			if _, ok := m.inputModel.PopStash(); ok {
+				return m, m.setFlash("draft restored"), true
+			}
+			return m, nil, true
+		}
+		if m.inputModel.Stash() {
+			return m, m.setFlash("draft stashed (ctrl+s to pop)"), true
+		}
 		return m, nil, true
 	}
 
@@ -1434,6 +1540,10 @@ func (m *model) handleInputKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.inputModel.Text == prevText {
 		return m, cmd
 	}
+	// The user has edited the prompt, so it is no longer the draft Ctrl+S handed
+	// them. This is what lets the next Ctrl+S reach the stash entry underneath
+	// instead of parking the restored one again.
+	m.inputModel.markStashEdited()
 
 	// The text changed: open or close the popup to match the new prompt.
 	if m.searchPopup != nil && m.searchPopup.mode == searchModeCommands && !m.shouldShowSlashCommandPopup() {
@@ -1549,6 +1659,9 @@ func (m *model) acceptSearchPopupSelection() {
 		m.searchPopup = nil
 	case searchModeHistory:
 		m.inputModel.SetText(item.Text)
+		m.searchPopup = nil
+	case searchModeAgents:
+		m.expandAgentCard(item.AgentID)
 		m.searchPopup = nil
 	}
 }
@@ -2599,9 +2712,12 @@ func (m *model) renderSearchPopup(width int) string {
 
 	if len(sp.filtered) == 0 {
 		b.WriteString("\n")
-		if sp.mode == searchModeCommands {
+		switch sp.mode {
+		case searchModeCommands:
 			b.WriteString(st.searchStyle.Width(width).Render("  No matching commands"))
-		} else {
+		case searchModeAgents:
+			b.WriteString(st.searchStyle.Width(width).Render("  No matching subagents"))
+		default:
 			b.WriteString(st.searchStyle.Width(width).Render("  No matching history"))
 		}
 		return st.popupStyle.Render(b.String())
@@ -2647,6 +2763,10 @@ func (m *model) searchPopupStyles(mode searchMode, width int) searchPopupStyleSe
 		accent = m.palette.Peach                                // orange for history
 		st.itemStyle = st.itemStyle.Foreground(m.palette.Peach) // orange
 		st.header = "History"
+	case searchModeAgents:
+		accent = m.palette.Mauve
+		st.itemStyle = st.itemStyle.Foreground(m.palette.Mauve)
+		st.header = "Subagents"
 	default:
 		return st
 	}
@@ -2683,8 +2803,10 @@ func writeSearchPopupItems(b *strings.Builder, sp *searchPopupState, st searchPo
 		}
 
 		line := prefix + item.Text
-		// Add description for commands.
-		if item.Description != "" && sp.mode == searchModeCommands {
+		// Add the description: for commands it is what the command does, for
+		// subagents it is type, status and duration. Both are why the row exists, so
+		// neither is worth rendering without it.
+		if item.Description != "" && (sp.mode == searchModeCommands || sp.mode == searchModeAgents) {
 			desc := clipRunes(item.Description, width*50/100)
 			if desc != "" {
 				line += "  " + desc

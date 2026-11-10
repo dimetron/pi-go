@@ -1,10 +1,13 @@
 package tui
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"charm.land/lipgloss/v2"
+
+	"github.com/dimetron/pi-go/internal/tools"
 )
 
 func TestRenderCompactTool_RegularTool(t *testing.T) {
@@ -454,12 +457,181 @@ func TestRenderRegularTool_PendingBlink(t *testing.T) {
 // bullet at one phase.
 func TestRenderKey_BlinkPhaseDistinct(t *testing.T) {
 	pending := message{role: "tool", tool: "bash", toolIn: "ls"}
-	if pending.renderKey(80, false, false, false, 0, true) == pending.renderKey(80, false, false, false, 0, false) {
+	if pending.renderKey(80, false, false, false, 0, true, VerbositySmart) == pending.renderKey(80, false, false, false, 0, false, VerbositySmart) {
 		t.Fatal("renderKey collides across blink phases -- cached render would freeze the bullet")
 	}
 	// Finished cards do not blink, so their key must not depend on the phase.
 	done := message{role: "tool", tool: "bash", toolIn: "ls", content: "done"}
-	if done.renderKey(80, false, false, false, 0, true) != done.renderKey(80, false, false, false, 0, false) {
+	if done.renderKey(80, false, false, false, 0, true, VerbositySmart) != done.renderKey(80, false, false, false, 0, false, VerbositySmart) {
 		t.Fatal("finished card key depends on blink phase -- it would re-render needlessly")
 	}
+}
+
+// TestToolResultSummary_DiffShapes guards the bug that made diff cards
+// unreadable: git-file-diff and git-hunk have no entry in toolResultShapes, so
+// both fell through to the JSON fallback and the card printed
+// `{"diff":"@@ -1,3 +1,4 @@\n-old\n+new\n",...}` — the one tool whose payload is
+// meant to be read as lines was the one rendering as one mangled line.
+func TestToolResultSummary_DiffShapes(t *testing.T) {
+	diff, _ := json.Marshal(map[string]any{
+		"file": "a.go", "diff": "@@ -1,3 +1,4 @@\n ctx\n-old\n+new\n",
+		"lines_added": 1, "lines_removed": 1,
+	})
+	got := toolResultSummary(string(diff))
+	if strings.Contains(got, `"diff"`) || strings.Contains(got, `{\"`) {
+		t.Errorf("git-file-diff summarized as JSON: %q", got)
+	}
+	for _, want := range []string{"(1 added, 1 removed)", "@@ -1,3 +1,4 @@", "-old", "+new"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("git-file-diff summary missing %q:\n%s", want, got)
+		}
+	}
+
+	hunks, _ := json.Marshal(map[string]any{
+		"file": "a.go", "total_hunks": float64(1),
+		"hunks": []any{map[string]any{
+			"header": "@@ -1,2 +1,2 @@", "content": " ctx\n-a\n+b\n",
+			"added": float64(1), "removed": float64(1),
+		}},
+	})
+	got = toolResultSummary(string(hunks))
+	if strings.Contains(got, `"hunks"`) {
+		t.Errorf("git-hunk summarized as JSON: %q", got)
+	}
+	if !strings.Contains(got, "@@ -1,2 +1,2 @@") || !strings.Contains(got, "+b") {
+		t.Errorf("git-hunk summary missing header or body:\n%s", got)
+	}
+
+	// A binary diff has no textual hunk to show, and must say so rather than
+	// printing an empty card.
+	bin, _ := json.Marshal(map[string]any{"file": "a.png", "diff": "", "binary": true})
+	if got := toolResultSummary(string(bin)); !strings.Contains(got, "binary") {
+		t.Errorf("binary diff summary = %q, want a binary notice", got)
+	}
+
+	// A hunk-less file is a real answer, not an unrecognized shape.
+	empty, _ := json.Marshal(map[string]any{"file": "a.go", "hunks": []any{}, "total_hunks": float64(0)})
+	if got := toolResultSummary(string(empty)); !strings.Contains(got, "no changes") {
+		t.Errorf("empty hunk summary = %q, want a no-changes notice", got)
+	}
+}
+
+// TestHighlightDiffOutput pins the diff palette to the renderer: the four
+// ThemeColors diff tokens existed and were drawn in the /theme preview strip,
+// but no renderer read them, so a diff could not look like a diff.
+func TestHighlightDiffOutput(t *testing.T) {
+	p := darkPalette
+	lines := []string{"@@ -1,3 +1,4 @@", " context", "-removed", "+added", "diff --git a/a.go b/a.go"}
+
+	got := highlightDiffOutput(lines, p)
+	if len(got) != len(lines) {
+		t.Fatalf("highlightDiffOutput returned %d lines for %d inputs", len(got), len(lines))
+	}
+	// Added rows carry the added foreground; removed rows the removed one.
+	if !strings.Contains(got[3], truecolorFragment(p.DiffAddedText)) {
+		t.Errorf("added line not styled with DiffAddedText: %q", got[3])
+	}
+	if !strings.Contains(got[2], truecolorFragment(p.DiffRemovedText)) {
+		t.Errorf("removed line not styled with DiffRemovedText: %q", got[2])
+	}
+	// The +/- gutter is not the only cue: a background tint distinguishes the
+	// rows even where the glyphs are not color-differentiated.
+	if !strings.Contains(got[3], "48;2;") && !strings.Contains(got[3], "48;5;") {
+		t.Errorf("added line has no background tint: %q", got[3])
+	}
+	// A hunk header is chrome, not content: it must not take a diff row color.
+	if strings.Contains(got[0], truecolorFragment(p.DiffAddedText)) {
+		t.Errorf("hunk header styled as an added line: %q", got[0])
+	}
+}
+
+// TestTruncateRunes_SmallBound is a regression guard, not a style preference:
+// the old body was `string(r[:n-3]) + "..."` with no floor, so n < 3 sliced with
+// a negative bound and panicked. argWidth() floors at 60 today, which is the only
+// reason this never fired in production — one new call site away from a crash.
+func TestTruncateRunes_SmallBound(t *testing.T) {
+	for _, n := range []int{-1, 0, 1, 2, 3, 4} {
+		got := truncateRunes("abcdef", n)
+		if len([]rune(got)) > max(n, 0) {
+			t.Errorf("truncateRunes(%q, %d) = %q, exceeds the bound", "abcdef", n, got)
+		}
+	}
+	if got := truncateRunes("abcdef", 0); got != "" {
+		t.Errorf("truncateRunes with n=0 = %q, want empty", got)
+	}
+	// A string that already fits is returned untouched at every bound.
+	if got := truncateRunes("ab", 2); got != "ab" {
+		t.Errorf("truncateRunes(%q, 2) = %q, want it unchanged", "ab", got)
+	}
+}
+
+// TestToolResultSummary_InspectorShapes pins shapes for the tools that render
+// repository and image inspection results. Both were missing, so a git-overview
+// card printed the whole repo state as one JSON line and a read_image card
+// printed its dimensions as JSON — output a reader cannot parse at a glance.
+//
+// Payloads are marshaled from the tools package's real output structs rather
+// than hand-written maps: a fixture I invented would encode the field names I
+// assumed, which is the thing under test.
+func TestToolResultSummary_InspectorShapes(t *testing.T) {
+	t.Run("git-overview", func(t *testing.T) {
+		raw, err := json.Marshal(tools.GitOverviewOutput{
+			Branch: "main", Upstream: "origin/main", Ahead: 2, Behind: 1,
+			RecentCommits:  []string{"abc1234 fix(tui): x"},
+			StagedFiles:    []string{"a.go"},
+			UnstagedFiles:  []string{"b.go"},
+			UntrackedFiles: []string{"c.go", "d.go"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := toolResultSummary(string(raw))
+		if strings.Contains(got, `"branch"`) {
+			t.Fatalf("git-overview summarized as JSON: %q", got)
+		}
+		// The upstream position and every dirty-state list must survive: these are
+		// the fields a reader acts on, so a cap or a dropped section is a
+		// regression even though the summary would look tidier.
+		for _, want := range []string{"main", "origin/main", "+2/-1", "staged", "a.go", "unstaged", "b.go", "untracked", "c.go", "d.go"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("git-overview summary missing %q:\n%s", want, got)
+			}
+		}
+	})
+
+	t.Run("git-overview without upstream", func(t *testing.T) {
+		raw, _ := json.Marshal(tools.GitOverviewOutput{Branch: "main", RecentCommits: []string{"abc1234 y"}})
+		got := toolResultSummary(string(raw))
+		if strings.Contains(got, "→") {
+			t.Errorf("a repo with no upstream printed an arrow: %q", got)
+		}
+		if !strings.HasPrefix(got, "main") {
+			t.Errorf("summary should start with the branch: %q", got)
+		}
+	})
+
+	t.Run("read_image", func(t *testing.T) {
+		raw, _ := json.Marshal(tools.ReadImageOutput{
+			Path: "shot.png", MIMEType: "image/png", Width: 800, Height: 600, Size: 12345,
+		})
+		got := toolResultSummary(string(raw))
+		if strings.Contains(got, `"path"`) {
+			t.Fatalf("read_image summarized as JSON: %q", got)
+		}
+		for _, want := range []string{"shot.png", "800x600", "image/png", "12345 bytes"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("read_image summary missing %q: %q", want, got)
+			}
+		}
+	})
+
+	t.Run("read_image undetectable dimensions", func(t *testing.T) {
+		// Width/height are 0 when the decoder cannot measure the image; the summary
+		// must not print "0x0".
+		raw, _ := json.Marshal(tools.ReadImageOutput{Path: "shot.png", MIMEType: "image/png", Size: 10})
+		got := toolResultSummary(string(raw))
+		if strings.Contains(got, "0x0") {
+			t.Errorf("undetectable dimensions rendered as 0x0: %q", got)
+		}
+	})
 }

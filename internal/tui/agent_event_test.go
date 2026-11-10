@@ -407,15 +407,43 @@ func TestFormatToolResult_Bash(t *testing.T) {
 	}
 }
 
-func TestFormatToolResult_BashShowsFirstTwoAndLastTwoLines(t *testing.T) {
+// TestFormatToolResult_BashKeepsWholeShortOutput pins that output inside the
+// preview window is never elided: the head/tail split is a truncation rule, not
+// a layout, and a six-line result must render as six lines.
+//
+// It replaces the old TestFormatToolResult_BashShowsFirstTwoAndLastTwoLines,
+// which pinned head-2/tail-2 and so discarded the middle of every short result.
+func TestFormatToolResult_BashKeepsWholeShortOutput(t *testing.T) {
 	data := map[string]any{
 		"exit_code": float64(0),
 		"stdout":    "one\ntwo\nthree\nfour\nfive\nsix\n",
 	}
 	result := formatToolResult(data)
-	want := "one\ntwo\nfive\nsix"
+	want := "one\ntwo\nthree\nfour\nfive\nsix"
 	if result != want {
 		t.Errorf("expected %q, got %q", want, result)
+	}
+}
+
+// TestFormatToolResult_BashTailSurvivesTruncation is the case that motivates the
+// split: a build that fails at the end of a long log. The failure line must be
+// in the preview and the elision must say how much was cut.
+func TestFormatToolResult_BashTailSurvivesTruncation(t *testing.T) {
+	var log strings.Builder
+	for i := range 40 {
+		fmt.Fprintf(&log, "compiling package %d\n", i)
+	}
+	log.WriteString("FAIL: internal/tui — undefined: foo\n")
+
+	result := formatToolResult(map[string]any{"exit_code": float64(1), "stdout": log.String()})
+	if !strings.Contains(result, "FAIL: internal/tui — undefined: foo") {
+		t.Errorf("the failing line was truncated away:\n%s", result)
+	}
+	if !strings.Contains(result, "earlier lines") {
+		t.Errorf("elision marker missing its count:\n%s", result)
+	}
+	if !strings.HasPrefix(result, "exit 1: compiling package 0") {
+		t.Errorf("the head of the output is gone:\n%s", result)
 	}
 }
 
