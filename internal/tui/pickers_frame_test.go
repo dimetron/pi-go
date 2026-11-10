@@ -77,3 +77,78 @@ func TestPickersRenderInAFrame(t *testing.T) {
 		assertFrame(t, m, "Models")
 	})
 }
+
+// TestPickersShowNoMatchRow drives each picker to an empty result and renders a
+// real frame.
+//
+// The empty state is the one a user reaches by mistyping, and it is the state
+// most likely to be forgotten: the popup has to keep its chrome and say why the
+// list is empty rather than collapsing to nothing. Each new mode adds its own
+// row to that switch, so an unrendered case reads as a blank popup.
+func TestPickersShowNoMatchRow(t *testing.T) {
+	cases := []struct {
+		header, want string
+		open         func(*testing.T) *model
+	}{
+		{
+			header: "Themes",
+			want:   "No matching themes",
+			open:   func(t *testing.T) *model { return themePickerModel(t) },
+		},
+		{
+			header: "Models",
+			want:   "No matching models",
+			open: func(t *testing.T) *model {
+				ctx, cancel := context.WithCancel(context.Background())
+				t.Cleanup(cancel)
+				m := &model{
+					ctx: ctx, cancel: cancel,
+					inputModel: NewInputModel(nil, nil, nil, ""),
+					chatModel:  ChatModel{Messages: make([]message, 0)},
+					width:      100, height: 40,
+					cfg: Config{Roles: map[string]config.RoleConfig{
+						"default": {Model: "claude-sonnet-4-6"},
+					}},
+				}
+				_, _ = m.handleModelCommand(nil)
+				return m
+			},
+		},
+		{
+			header: "Timeline",
+			want:   "No matching turns",
+			open: func(t *testing.T) *model {
+				m := buildTranscript(t, 100)
+				m.handleTimelineCommand()
+				return m
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.header, func(t *testing.T) {
+			m := tc.open(t)
+			if m.searchPopup == nil {
+				t.Fatal("picker did not open")
+			}
+			// Type a query that matches nothing, then compose a real frame.
+			m.searchPopup.search = "zzzz-no-such-thing"
+			m.searchPopup.filterSearch()
+			if len(m.searchPopup.filtered) != 0 {
+				t.Fatalf("query matched %d rows, want 0", len(m.searchPopup.filtered))
+			}
+
+			m.width, m.height = 100, 40
+			m.chatModel.Width = 100
+			view := m.View().Content
+			if !strings.Contains(view, tc.want) {
+				t.Errorf("frame is missing %q; an empty list left the popup blank", tc.want)
+			}
+			for i, line := range strings.Split(view, "\n") {
+				if got := ansi.StringWidth(line); got != 100 {
+					t.Errorf("row %d is %d cells wide, want 100: %q", i, got, line)
+				}
+			}
+		})
+	}
+}

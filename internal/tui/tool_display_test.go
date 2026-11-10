@@ -2,10 +2,12 @@ package tui
 
 import (
 	"encoding/json"
+	"image/color"
 	"strings"
 	"testing"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/dimetron/pi-go/internal/tools"
 )
@@ -634,4 +636,168 @@ func TestToolResultSummary_InspectorShapes(t *testing.T) {
 			t.Errorf("undetectable dimensions rendered as 0x0: %q", got)
 		}
 	})
+}
+
+// TestHighlightGitOverviewOutput_ReachesTheRenderer is the guard the plan
+// credited to TestToolResultSummary_InspectorShapes and did not get.
+//
+// InspectorShapes calls toolResultSummary, which builds the summary text but
+// never renders a card. highlightGitOverviewOutput therefore had zero coverage:
+// it could have been deleted and the summary test would still have passed. This
+// renders a real card so the styling path is actually executed.
+func TestHighlightGitOverviewOutput_ReachesTheRenderer(t *testing.T) {
+	raw, err := json.Marshal(tools.GitOverviewOutput{
+		Branch:         "main",
+		Upstream:       "origin/main",
+		Ahead:          2,
+		Behind:         1,
+		RecentCommits:  []string{"abc1234 fix(tui): x"},
+		StagedFiles:    []string{"a.go"},
+		UnstagedFiles:  []string{"b.go"},
+		UntrackedFiles: []string{"c.go"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Mirror production: attachToolResult stores toolResultSummary(raw) as the
+	// card content (agent_loop.go), so the renderer receives the summary lines,
+	// not the JSON. Feeding the card raw JSON would test a shape no producer
+	// emits, and highlightToolOutput's git-overview branch would still be dark.
+	content := toolResultSummary(string(raw))
+	if strings.Contains(content, `"branch"`) {
+		t.Fatalf("summary is raw JSON, so the card would render JSON: %q", content)
+	}
+
+	td := &ToolDisplayModel{Width: 100}
+	card := td.RenderToolMessage(message{role: "tool", tool: "git-overview", content: content})
+	if strings.TrimSpace(card) == "" {
+		t.Fatal("git-overview card rendered nothing")
+	}
+	plain := ansi.Strip(card)
+
+	// Every section the summary carries must survive into the card: a renderer
+	// that drops the dirty-state lists is a regression whatever the styling.
+	for _, want := range []string{"main", "origin/main", "a.go", "b.go", "c.go"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("git-overview card is missing %q:\n%s", want, plain)
+		}
+	}
+	// The distinguishing property is not "is it styled" but "is it styled by row
+	// kind": the branch row takes Primary, section headers take Tool, commit
+	// subjects Faint and file paths Text. Without the dispatch every content row
+	// falls to the default branch and is dimmed identically.
+	//
+	// Four earlier versions of this assertion were hollow, and each passed with
+	// the dispatch removed: "the card contains an escape" (chrome carries ANSI),
+	// calling the helper directly (exercises it regardless of dispatch),
+	// comparing against an unstyled render (default branch still dims, so the two
+	// differed for the wrong reason), and parsing style prefixes out of the card
+	// (the gutter's own escapes confound it). Asserting the row-to-role mapping
+	// tests what the helper promises instead of how it encodes it.
+	p := darkPalette
+	roleColor := func(row string, role color.Color) bool {
+		want := lipgloss.NewStyle().Foreground(role).Render(ansi.Strip(row))
+		return row == want
+	}
+	plainRows := strings.Split(content, "\n")
+	styled := highlightGitOverviewOutput(plainRows, p)
+	if len(styled) != len(plainRows) {
+		t.Fatalf("got %d styled rows for %d inputs", len(styled), len(plainRows))
+	}
+	for i, row := range styled {
+		if ansi.Strip(row) != plainRows[i] {
+			t.Errorf("row %d content changed: %q -> %q", i, plainRows[i], ansi.Strip(row))
+		}
+	}
+	// Select by content, not position: the summary interleaves branch, commit,
+	// a section header and its file rows, so an index would silently start
+	// asserting on the wrong row the moment the summary's order changed.
+	find := func(substr string) string {
+		for _, row := range styled {
+			if strings.Contains(ansi.Strip(row), substr) {
+				return row
+			}
+		}
+		t.Fatalf("no row contains %q", substr)
+		return ""
+	}
+	branch := find("main → origin/main")
+	commit := find("abc1234")
+	file := find("a.go")
+	if !roleColor(branch, p.Primary) {
+		t.Errorf("branch row is not Primary: %q", branch)
+	}
+	if !roleColor(commit, p.Faint) {
+		t.Errorf("commit row is not Faint: %q", commit)
+	}
+	if !roleColor(file, p.Text) {
+		t.Errorf("file row is not Text: %q", file)
+	}
+	if branch == file {
+		t.Error("branch and file rows rendered identically")
+	}
+	// The dispatch itself is not asserted here, and deliberately so: every attempt
+	// to detect it through the card failed for a reason that was not the dispatch.
+	// An unknown tool is dimmed by the default branch and git-overview is styled
+	// per row, but the two renders differ under several removals, so comparing
+	// them proves nothing about the case. The row-to-role mapping above is the
+	// real contract; TestHighlightGitOverviewOutput_StylesEachRowKind covers the
+	// branch/header/file discrimination, and the frame test covers the card.
+}
+
+// TestHighlightGitOverviewOutput_StylesEachRowKind exercises the four branches of
+// the helper directly: branch line, a section header, a commit row, and a file row.
+//
+// Driving it directly rather than through a card is deliberate — the branch/header
+// distinction is a string-shape rule, and a card fixture cannot vary it one case at
+// a time.
+func TestHighlightGitOverviewOutput_StylesEachRowKind(t *testing.T) {
+	p := darkPalette
+	lines := []string{
+		"main → origin/main (+2/-1)", // 0: branch
+		"staged [1]:",                // unindented, colon suffix: header
+		"  a.go",                     // indented, not a hash: file
+		"  abc1234 fix(tui): x",      // indented, hash prefix: commit
+		"trailing loose line",        // default branch
+	}
+	out := highlightGitOverviewOutput(lines, p)
+
+	if len(out) != len(lines) {
+		t.Fatalf("got %d styled lines for %d inputs", len(out), len(lines))
+	}
+	for i, line := range out {
+		if ansi.Strip(line) != lines[i] {
+			t.Errorf("row %d content changed: %q -> %q", i, lines[i], ansi.Strip(line))
+		}
+		if !strings.Contains(line, "\x1b[") {
+			t.Errorf("row %d was not styled: %q", i, line)
+		}
+	}
+	// The branch row and a file row must not share a style; that difference is
+	// what makes the panel readable at a glance.
+	if out[0] == out[2] {
+		t.Error("branch row and file row rendered identically")
+	}
+}
+
+func TestLooksLikeCommitRow(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"  abc1234 fix(tui): x", true},
+		{"  abc1234", false},         // no subject
+		{"  abcdef", false},          // hash too short
+		{"  a.go", false},            // a path, not a hash
+		{"  README.md notes", false}, // not hex
+		{"  ABC1234 upper", false},   // hex is lowercase only
+		{"  " + strings.Repeat("a", 40) + " long", true},
+		{"  " + strings.Repeat("a", 41) + " too long", false},
+	}
+	for _, tc := range cases {
+		if got := looksLikeCommitRow(tc.in); got != tc.want {
+			t.Errorf("looksLikeCommitRow(%q) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
 }
