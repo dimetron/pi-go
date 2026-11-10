@@ -201,30 +201,51 @@ func TestHandleThemeCommand_NilThemeManager(t *testing.T) {
 }
 
 func TestHandleThemeCommand_ListThemes(t *testing.T) {
+	// Bare /theme opens the picker rather than appending a rendered list. The
+	// list still has to name every theme and keep the light/dark icons, so this
+	// asserts the same properties against the popup rows that the message used
+	// to carry.
 	tm := NewThemeManager()
 	m := &model{
 		chatModel:    ChatModel{Messages: make([]message, 0)},
 		themeManager: tm,
+		width:        100,
+		height:       30,
 	}
 
-	newM, cmd := m.handleThemeCommand([]string{})
+	newM, cmd := m.handleThemeCommand(nil)
 	mm := newM.(*model)
 
 	if cmd != nil {
 		t.Error("expected nil cmd")
 	}
-	if len(mm.chatModel.Messages) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(mm.chatModel.Messages))
+	if mm.searchPopup == nil {
+		t.Fatal("bare /theme did not open the theme picker")
 	}
-	if !mm.chatModel.Messages[0].preRendered {
-		t.Error("theme list carries ANSI, so it must bypass glamour")
+	if mm.searchPopup.mode != searchModeThemes {
+		t.Errorf("popup mode = %q, want %q", mm.searchPopup.mode, searchModeThemes)
 	}
-	content := mm.chatModel.Messages[0].content
-	if !strings.Contains(content, "tokyo-night") {
-		t.Errorf("expected theme names in the list, got %q", content)
+	if len(mm.chatModel.Messages) != 0 {
+		t.Errorf("bare /theme appended %d messages, want the picker only", len(mm.chatModel.Messages))
 	}
-	if !strings.Contains(content, "🌙") || !strings.Contains(content, "☀️") {
-		t.Errorf("expected light/dark icons in the list, got %q", content)
+
+	var sawName, sawMoon, sawSun bool
+	for _, item := range mm.searchPopup.entries {
+		if item.Text == "tokyo-night" {
+			sawName = true
+		}
+		switch item.Icon {
+		case "🌙":
+			sawMoon = true
+		case "☀️":
+			sawSun = true
+		}
+	}
+	if !sawName {
+		t.Error("expected tokyo-night among the picker rows")
+	}
+	if !sawMoon || !sawSun {
+		t.Errorf("expected light and dark icons in the picker, got moon=%v sun=%v", sawMoon, sawSun)
 	}
 }
 

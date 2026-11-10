@@ -1083,11 +1083,13 @@ func (m *model) handleThemeCommand(args []string) (tea.Model, tea.Cmd) {
 	}
 
 	if len(args) == 0 {
-		m.chatModel.Messages = append(m.chatModel.Messages, message{
-			role:        "assistant",
-			preRendered: true,
-			content:     formatThemeList(m.themeManager.List(), m.themeManager.CurrentName(), m.palette),
-		})
+		// A second bare /theme closes the picker, matching /subagents and the
+		// Ctrl+B popup; re-running a command should not stack windows.
+		if m.searchPopup != nil && m.searchPopup.mode == searchModeThemes {
+			m.revertThemeSelection()
+			return m, nil
+		}
+		m.newSearchPopup(searchModeThemes)
 		return m, nil
 	}
 

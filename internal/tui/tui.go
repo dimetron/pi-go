@@ -312,13 +312,29 @@ func listGitBranches(workDir string) []string {
 // searchPopupState is a unified search window for slash commands and history.
 // The mode determines what items are shown and how they are selected.
 type searchPopupState struct {
-	mode      searchMode   // "commands", "history", or "agents"
+	mode      searchMode   // "commands", "history", "agents", or a picker
 	entries   []SearchItem // all items (commands or history entries)
 	filtered  []SearchItem // filtered by search query
 	selected  int          // currently selected index in filtered list
 	search    string       // current search query
 	height    int          // popup height (number of visible items)
 	scrollOff int          // scroll offset when more entries than height
+	// payload carries the state a picker must remember across keystrokes but
+	// must not lose when the list is filtered or the selection moves. Nil in
+	// modes that need none.
+	payload *searchPopupPayload
+}
+
+// searchPopupPayload is the per-mode state a previewing picker owns.
+//
+// Picking a theme previews it by mutating the real ThemeManager, so Esc has to
+// put back exactly what was there before the popup opened. Both fields are
+// captured once at open time, not per keystroke: re-capturing on every move
+// would make the "original" whatever the last preview left behind, and Esc
+// would revert to the theme the user was already looking at.
+type searchPopupPayload struct {
+	originalTheme      string
+	originalBgDetected bool
 }
 
 // searchMode determines what the popup displays.
@@ -328,6 +344,7 @@ const (
 	searchModeCommands searchMode = "commands"
 	searchModeHistory  searchMode = "history"
 	searchModeAgents   searchMode = "agents"
+	searchModeThemes   searchMode = "themes"
 )
 
 // SearchItem represents an item in the search popup (command, history entry, or
@@ -343,6 +360,9 @@ type SearchItem struct {
 	// orchestrator refuses a non-running agent, so the picker gates the key on
 	// this rather than surfacing that refusal as an error.
 	Running bool
+	// Icon is a leading glyph for rows whose meaning is visual rather than
+	// textual — a theme's light/dark variant. Empty rows get the plain prefix.
+	Icon string
 }
 
 // searchPopupChrome is the number of rows the search popup reserves for chrome
@@ -425,6 +445,15 @@ func (m *model) newSearchPopup(mode searchMode) {
 		if len(items) == 0 {
 			return
 		}
+
+	case searchModeThemes:
+		if m.themeManager == nil {
+			return
+		}
+		items = themeSearchItems(m.themeManager.List(), m.themeManager.CurrentName())
+		if len(items) == 0 {
+			return
+		}
 	}
 
 	availableRows := m.messageViewportHeight()
@@ -445,6 +474,105 @@ func (m *model) newSearchPopup(mode searchMode) {
 		height:    popupHeight,
 		scrollOff: 0,
 	}
+
+	// A previewing picker captures what to revert to before it changes
+	// anything. Captured at open, not per keystroke.
+	if mode == searchModeThemes {
+		// Open on the theme in use. Opening is not a choice, so the picker must
+		// not repaint the TUI just because it appeared; it also makes Esc a true
+		// no-op when the user moved nowhere.
+		for i, item := range items {
+			if item.Text == m.themeManager.CurrentName() {
+				m.searchPopup.selected = i
+				break
+			}
+		}
+		m.searchPopup.payload = &searchPopupPayload{
+			originalTheme:      m.themeManager.CurrentName(),
+			originalBgDetected: m.bgDetected,
+		}
+		m.previewThemeSelection()
+	}
+}
+
+// previewThemeSelection applies the highlighted theme so moving through the
+// picker shows the TUI in each one, without persisting anything.
+//
+// It mutates the live ThemeManager, which is why the picker keeps the theme it
+// opened with in its payload: previewing is indistinguishable from choosing
+// until Esc puts the original back.
+func (m *model) previewThemeSelection() {
+	if m.searchPopup == nil || m.searchPopup.mode != searchModeThemes {
+		return
+	}
+	sp := m.searchPopup
+	if sp.selected < 0 || sp.selected >= len(sp.filtered) {
+		return
+	}
+	name := sp.filtered[sp.selected].Text
+	if m.themeManager.CurrentName() == name {
+		return
+	}
+	if err := m.themeManager.SetTheme(name); err != nil {
+		return
+	}
+	m.bgDetected = true
+	m.applyTheme()
+}
+
+// commitThemeSelection persists the previewed theme and closes the picker.
+func (m *model) commitThemeSelection() {
+	sp := m.searchPopup
+	if sp == nil || sp.selected < 0 || sp.selected >= len(sp.filtered) {
+		return
+	}
+	name := sp.filtered[sp.selected].Text
+	if m.themeManager.CurrentName() != name {
+		if err := m.themeManager.SetTheme(name); err != nil {
+			return
+		}
+	}
+	saveThemeToConfig(name)
+	m.bgDetected = true
+	m.applyTheme()
+	m.searchPopup = nil
+	m.setFlash("theme: " + name)
+}
+
+// revertThemeSelection puts back the theme the picker opened with, so Esc after
+// a few previews leaves no trace.
+func (m *model) revertThemeSelection() {
+	sp := m.searchPopup
+	if sp == nil || sp.payload == nil {
+		m.searchPopup = nil
+		return
+	}
+	if m.themeManager != nil {
+		if err := m.themeManager.SetTheme(sp.payload.originalTheme); err == nil {
+			m.bgDetected = sp.payload.originalBgDetected
+			m.applyTheme()
+		}
+	}
+	m.searchPopup = nil
+}
+
+// themeSearchItems builds the theme picker rows: a variant icon, the theme name,
+// and its display name. The active theme is marked so a user who opened the
+// picker can tell what they were already on without moving the cursor.
+func themeSearchItems(themes []Theme, current string) []SearchItem {
+	items := make([]SearchItem, 0, len(themes))
+	for _, t := range themes {
+		icon := "🌙"
+		if t.ThemeType == "light" {
+			icon = "☀️"
+		}
+		desc := t.DisplayName
+		if t.Name == current {
+			desc += " · current"
+		}
+		items = append(items, SearchItem{Text: t.Name, Description: desc, Icon: icon})
+	}
+	return items
 }
 
 // refreshSearchPopupHeight recomputes the popup's visible item count after
@@ -1565,17 +1693,24 @@ func (m *model) handleSearchPopupKey(key tea.Key) bool {
 	switch key.Code {
 	case tea.KeyUp:
 		sp.selectPrev()
+		m.previewThemeSelection()
 		return true
 	case tea.KeyDown:
 		sp.selectNext()
+		m.previewThemeSelection()
 		return true
 	case tea.KeyTab:
 		sp.selectByTab(key.Mod == tea.ModShift)
+		m.previewThemeSelection()
 		return true
 	case tea.KeyEnter:
 		m.acceptSearchPopupSelection()
 		return true
 	case tea.KeyEsc:
+		if sp.mode == searchModeThemes {
+			m.revertThemeSelection()
+			return true
+		}
 		m.searchPopup = nil
 		return true
 	case tea.KeyBackspace:
@@ -1586,12 +1721,14 @@ func (m *model) handleSearchPopupKey(key tea.Key) bool {
 		}
 		sp.search = sp.search[:len(sp.search)-1]
 		sp.filterSearch()
+		m.previewThemeSelection()
 		return true
 	default:
 		// Type to search (only for printable single characters).
 		if key.Text != "" && len(key.Text) == 1 && key.Mod == 0 {
 			sp.search += key.Text
 			sp.filterSearch()
+			m.previewThemeSelection()
 			return true
 		}
 		return false
@@ -1663,6 +1800,8 @@ func (m *model) acceptSearchPopupSelection() {
 	case searchModeAgents:
 		m.expandAgentCard(item.AgentID)
 		m.searchPopup = nil
+	case searchModeThemes:
+		m.commitThemeSelection()
 	}
 }
 
@@ -2717,6 +2856,8 @@ func (m *model) renderSearchPopup(width int) string {
 			b.WriteString(st.searchStyle.Width(width).Render("  No matching commands"))
 		case searchModeAgents:
 			b.WriteString(st.searchStyle.Width(width).Render("  No matching subagents"))
+		case searchModeThemes:
+			b.WriteString(st.searchStyle.Width(width).Render("  No matching themes"))
 		default:
 			b.WriteString(st.searchStyle.Width(width).Render("  No matching history"))
 		}
@@ -2767,6 +2908,10 @@ func (m *model) searchPopupStyles(mode searchMode, width int) searchPopupStyleSe
 		accent = m.palette.Mauve
 		st.itemStyle = st.itemStyle.Foreground(m.palette.Mauve)
 		st.header = "Subagents"
+	case searchModeThemes:
+		accent = m.palette.Yellow
+		st.itemStyle = st.itemStyle.Foreground(m.palette.Yellow)
+		st.header = "Themes"
 	default:
 		return st
 	}
@@ -2803,10 +2948,15 @@ func writeSearchPopupItems(b *strings.Builder, sp *searchPopupState, st searchPo
 		}
 
 		line := prefix + item.Text
+		// The icon carries a theme's light/dark variant, which is the one thing
+		// a name cannot say and a user needs before previewing it.
+		if item.Icon != "" {
+			line = prefix + item.Icon + " " + item.Text
+		}
 		// Add the description: for commands it is what the command does, for
-		// subagents it is type, status and duration. Both are why the row exists, so
-		// neither is worth rendering without it.
-		if item.Description != "" && (sp.mode == searchModeCommands || sp.mode == searchModeAgents) {
+		// subagents it is type, status and duration, for themes it is the display
+		// name. Each is why the row exists, so none is worth rendering without it.
+		if item.Description != "" && sp.mode != searchModeHistory {
 			desc := clipRunes(item.Description, width*50/100)
 			if desc != "" {
 				line += "  " + desc
