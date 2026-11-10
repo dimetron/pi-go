@@ -204,7 +204,14 @@ func TestBashOutputPreview(t *testing.T) {
 		{name: "falls back to stderr", stderr: "boom", want: "boom"},
 		{name: "prefers stdout", stdout: "out", stderr: "err", want: "out"},
 		{name: "short output is whole", stdout: "a\nb\nc\n", want: "a\nb\nc"},
-		{name: "long output is head and tail", stdout: "1\n2\n3\n4\n5\n6", want: "1\n2\n5\n6"},
+		{name: "output inside the window is not elided", stdout: "1\n2\n3\n4\n5\n6", want: "1\n2\n3\n4\n5\n6"},
+		{
+			// Head 2, elision marker, tail 10. The tail carries the lines that
+			// explain a failure, so it is the larger half.
+			name:   "long output keeps head and tail with a count",
+			stdout: "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16",
+			want:   "1\n2\n  ⋯ (4 earlier lines)\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16",
+		},
 		{
 			name:   "long lines are clipped",
 			stdout: strings.Repeat("x", 100),

@@ -10,10 +10,13 @@ import (
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
 
+	"charm.land/lipgloss/v2"
+
 	"github.com/dimetron/pi-go/internal/agent"
 	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/extension"
 	pisession "github.com/dimetron/pi-go/internal/session"
+	"github.com/dimetron/pi-go/internal/subagent"
 )
 
 // --- handleCompactCommand tests ---
@@ -198,30 +201,51 @@ func TestHandleThemeCommand_NilThemeManager(t *testing.T) {
 }
 
 func TestHandleThemeCommand_ListThemes(t *testing.T) {
+	// Bare /theme opens the picker rather than appending a rendered list. The
+	// list still has to name every theme and keep the light/dark icons, so this
+	// asserts the same properties against the popup rows that the message used
+	// to carry.
 	tm := NewThemeManager()
 	m := &model{
 		chatModel:    ChatModel{Messages: make([]message, 0)},
 		themeManager: tm,
+		width:        100,
+		height:       30,
 	}
 
-	newM, cmd := m.handleThemeCommand([]string{})
+	newM, cmd := m.handleThemeCommand(nil)
 	mm := newM.(*model)
 
 	if cmd != nil {
 		t.Error("expected nil cmd")
 	}
-	if len(mm.chatModel.Messages) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(mm.chatModel.Messages))
+	if mm.searchPopup == nil {
+		t.Fatal("bare /theme did not open the theme picker")
 	}
-	if !mm.chatModel.Messages[0].preRendered {
-		t.Error("theme list carries ANSI, so it must bypass glamour")
+	if mm.searchPopup.mode != searchModeThemes {
+		t.Errorf("popup mode = %q, want %q", mm.searchPopup.mode, searchModeThemes)
 	}
-	content := mm.chatModel.Messages[0].content
-	if !strings.Contains(content, "tokyo-night") {
-		t.Errorf("expected theme names in the list, got %q", content)
+	if len(mm.chatModel.Messages) != 0 {
+		t.Errorf("bare /theme appended %d messages, want the picker only", len(mm.chatModel.Messages))
 	}
-	if !strings.Contains(content, "🌙") || !strings.Contains(content, "☀️") {
-		t.Errorf("expected light/dark icons in the list, got %q", content)
+
+	var sawName, sawMoon, sawSun bool
+	for _, item := range mm.searchPopup.entries {
+		if item.Text == "tokyo-night" {
+			sawName = true
+		}
+		switch item.Icon {
+		case "🌙":
+			sawMoon = true
+		case "☀️":
+			sawSun = true
+		}
+	}
+	if !sawName {
+		t.Error("expected tokyo-night among the picker rows")
+	}
+	if !sawMoon || !sawSun {
+		t.Errorf("expected light and dark icons in the picker, got moon=%v sun=%v", sawMoon, sawSun)
 	}
 }
 
@@ -1044,4 +1068,146 @@ func makeTextEvent(author, text string) *session.Event {
 	}
 	ev.Content = genai.NewContentFromText(text, genai.RoleUser)
 	return ev
+}
+
+// agentItemsFixture builds a picker over a mixed set of agent states.
+func agentItemsFixture() []subagent.AgentStatus {
+	return []subagent.AgentStatus{
+		{AgentID: "aaaa1111bbbb", Type: "task", Status: "completed", Prompt: "Summarize the diff", Duration: "3s"},
+		{AgentID: "cccc2222dddd", Type: "explore", Status: "running", Prompt: "Find the config\nwith more lines", StartedAt: time.Now()},
+	}
+}
+
+// TestAgentSearchItems covers the picker's rows. The picker is a view over the
+// orchestrator's state, so what matters is that each row carries enough to act on:
+// the ID to select or cancel, the running flag to gate cancellation, and a title
+// that is the first line of the prompt rather than the whole thing.
+func TestAgentSearchItems(t *testing.T) {
+	items := agentSearchItems(agentItemsFixture())
+	if len(items) != 2 {
+		t.Fatalf("got %d items, want 2", len(items))
+	}
+
+	// Running agents sort first so a live one is reachable without scrolling.
+	if !items[0].Running {
+		t.Error("a running agent should sort first")
+	}
+	if items[0].AgentID != "cccc2222dddd" {
+		t.Errorf("first item = %q, want the running agent", items[0].AgentID)
+	}
+
+	for _, it := range items {
+		if it.AgentID == "" {
+			t.Errorf("item %q has no AgentID; it cannot be accepted or canceled", it.Text)
+		}
+		if strings.Contains(it.Text, "\n") {
+			t.Errorf("title %q carries a newline; it would break the popup row", it.Text)
+		}
+	}
+	// The status and duration are what tell two rows apart.
+	if !strings.Contains(items[0].Description, "running") {
+		t.Errorf("running row description = %q", items[0].Description)
+	}
+	if !strings.Contains(items[1].Description, "completed") || !strings.Contains(items[1].Description, "3s") {
+		t.Errorf("completed row description = %q, want status and duration", items[1].Description)
+	}
+	// Status icons distinguish the rows at a glance.
+	if !strings.HasPrefix(items[0].Text, "▶ ") {
+		t.Errorf("running row should carry the running icon, got %q", items[0].Text)
+	}
+	if !strings.HasPrefix(items[1].Text, "✓ ") {
+		t.Errorf("completed row should carry the done icon, got %q", items[1].Text)
+	}
+}
+
+// TestExpandAgentCard covers selecting a card from the picker. At most one card is
+// expanded, and selecting the same one again collapses it.
+func TestExpandAgentCard(t *testing.T) {
+	m := newTestModel(t)
+	m.chatModel.Messages = []message{
+		{role: "tool", tool: "subagent", agentID: "aaaa1111", agentEvents: []agentEv{{kind: "text", content: "one"}}},
+		{role: "tool", tool: "subagent", agentID: "cccc2222", agentEvents: []agentEv{{kind: "text", content: "two"}}},
+	}
+
+	m.expandAgentCard("aaaa1111")
+	if m.expandedAgentID() != "aaaa1111" {
+		t.Fatalf("expandedAgent = %q, want aaaa1111", m.expandedAgentID())
+	}
+	// Selecting another moves the expansion rather than adding a second.
+	m.expandAgentCard("cccc2222")
+	if m.expandedAgentID() != "cccc2222" {
+		t.Errorf("expandedAgent = %q, want cccc2222 — only one card may be expanded", m.expandedAgentID())
+	}
+	// Selecting it again collapses.
+	m.expandAgentCard("cccc2222")
+	if m.expandedAgentID() != "" {
+		t.Errorf("expandedAgent = %q, want empty after re-selecting", m.expandedAgentID())
+	}
+}
+
+// TestExpandAgentCardMissingReported checks the resume/compaction case: the
+// orchestrator can list an agent whose card is no longer in this transcript. Silence
+// there reads as a broken key, so it has to say something.
+func TestExpandAgentCardMissingReported(t *testing.T) {
+	m := newTestModel(t)
+	m.expandAgentCard("notinthisss")
+	if m.expandedAgentID() != "" {
+		t.Errorf("expandedAgent = %q, want empty for an absent card", m.expandedAgentID())
+	}
+	if m.flash == "" {
+		t.Error("selecting an agent with no card should say so, not silently do nothing")
+	}
+}
+
+// TestExpandedAgentWidensCardWindow is the payoff: the card shows more of its event
+// stream when it is the expanded one, and the note accounting for withheld events
+// shrinks accordingly.
+func TestExpandedAgentWidensCardWindow(t *testing.T) {
+	evs := make([]agentEv, 0, 40)
+	for i := 0; i < 40; i++ {
+		evs = append(evs, agentEv{kind: "tool_call", content: "step"})
+	}
+	msg := message{role: "tool", tool: "subagent", agentID: "aaaa1111", agentEvents: evs}
+
+	td := &ToolDisplayModel{Width: 100}
+	normal := td.renderAgentTool(msg, lipgloss.NewStyle(), darkPalette)
+
+	td.ExpandedAgentID = "aaaa1111"
+	expanded := td.renderAgentTool(msg, lipgloss.NewStyle(), darkPalette)
+
+	if n, e := strings.Count(normal, "\n"), strings.Count(expanded, "\n"); e <= n {
+		t.Errorf("expanded card has %d rows, normal has %d — expansion did not widen the window", e, n)
+	}
+	// A card that is not the expanded one keeps the normal window.
+	td.ExpandedAgentID = "someoneelse"
+	other := td.renderAgentTool(msg, lipgloss.NewStyle(), darkPalette)
+	if other != normal {
+		t.Error("a card other than the expanded one changed its window")
+	}
+}
+
+// TestCancelSelectedAgentReportsOrchestratorError pins that a refusal is surfaced.
+// The orchestrator rejects a non-running agent, and a user who pressed Ctrl+X on a
+// finished one must learn why nothing happened.
+func TestCancelSelectedAgentReportsOrchestratorError(t *testing.T) {
+	m := newTestModel(t)
+	m.cfg.Orchestrator = subagent.NewOrchestrator(&config.Config{}, "", nil)
+
+	m.searchPopup = &searchPopupState{
+		mode:    searchModeAgents,
+		entries: []SearchItem{{Text: "✓ done", AgentID: "gone0001"}},
+		filtered: []SearchItem{
+			{Text: "✓ done", AgentID: "gone0001"},
+		},
+	}
+	cmd := m.cancelSelectedAgent()
+	if cmd == nil {
+		t.Fatal("canceling an unknown agent must flash something")
+	}
+	if m.flash == "" {
+		t.Error("the orchestrator's refusal was swallowed")
+	}
+	if !strings.Contains(m.flash, "gone0001") && !strings.Contains(m.flash, "not found") {
+		t.Errorf("flash %q does not explain the refusal", m.flash)
+	}
 }

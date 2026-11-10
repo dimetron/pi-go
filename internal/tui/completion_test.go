@@ -516,3 +516,57 @@ func setupTestSpecs(t *testing.T, workDir string, names ...string) {
 		}
 	}
 }
+
+// TestSplitMentionLineRange pins the split that keeps a line range out of the
+// filename. Before it existed, extractMentions treated `@main.go#L10-20` as one
+// token, so the whole string traveled as the path and submit emitted
+// `[Referenced file: main.go#L10-20]` — asking the agent to read a file that does
+// not exist.
+func TestSplitMentionLineRange(t *testing.T) {
+	tests := []struct {
+		mention, wantPath, wantRange string
+	}{
+		{"main.go", "main.go", ""},
+		{"internal/tui/input.go", "internal/tui/input.go", ""},
+		{"main.go#L10", "main.go", "#L10"},
+		{"main.go#L10-20", "main.go", "#L10-20"},
+		{"internal/tui/input.go#L5-L9", "internal/tui/input.go", "#L5-L9"},
+		{"main.go#10-20", "main.go", "#10-20"},
+		// A '#' that is not a trailing range stays part of the path, so a file
+		// whose name contains one is not mangled.
+		{"weird#name.go", "weird#name.go", ""},
+		{"notes.md#section", "notes.md#section", ""},
+		// A bare range with no path is not a mention worth splitting.
+		{"#L10-20", "#L10-20", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.mention, func(t *testing.T) {
+			gotPath, gotRange := splitMentionLineRange(tt.mention)
+			if gotPath != tt.wantPath || gotRange != tt.wantRange {
+				t.Errorf("splitMentionLineRange(%q) = (%q, %q), want (%q, %q)",
+					tt.mention, gotPath, gotRange, tt.wantPath, tt.wantRange)
+			}
+		})
+	}
+}
+
+// TestExtractMentions_StripsLineRange checks the end-to-end effect: the path the
+// agent is told to read must be a path.
+func TestExtractMentions_StripsLineRange(t *testing.T) {
+	got := extractMentions("look at @main.go#L10-20 and @internal/tui/input.go also @README.md#L3")
+	want := []string{"main.go", "internal/tui/input.go", "README.md"}
+	if len(got) != len(want) {
+		t.Fatalf("extractMentions = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("mention %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+	// A range must never survive into a mention: that is the bug.
+	for _, m := range got {
+		if strings.Contains(m, "#") {
+			t.Errorf("mention %q still carries a line range", m)
+		}
+	}
+}

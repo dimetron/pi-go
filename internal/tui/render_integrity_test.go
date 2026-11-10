@@ -41,6 +41,14 @@ func realisticChat() []message {
 		{role: "tool", tool: "bash", toolIn: `{"command":"go test ./... -run TestVeryLongTestNameThatKeepsGoing"}`,
 			content: "ok  \tgithub.com/dimetron/pi-go/internal/tui\t7.4s\n" + strings.Repeat("noisy output line\n", 30)},
 		{role: "tool", tool: "grep", toolIn: `{"pattern":"func "}`, content: "server.go:12: func main()"},
+		// A diff card: the one tool whose payload is *all* newlines, plus a
+		// +-prefixed line longer than the panel. Both diff rows carry a
+		// background style, which is the case that can eat columns if the
+		// styling is not applied to the whole line.
+		{role: "tool", tool: "git-file-diff", toolIn: "server.go",
+			content: "@@ -1,4 +1,5 @@\n func main() {\n-\toldCall()\n+\tnewCall()\n+\t" + strings.Repeat("aVeryLongAddedLineThatExceedsThePanelWidth", 3) + "\n }\n(1 added, 1 removed)"},
+		{role: "tool", tool: "git-hunk", toolIn: "server.go",
+			content: "@@ -1,4 +1,5 @@\n func main() {\n-\toldCall()\n+\tnewCall()\n }"},
 		{role: "tool", tool: "subagent", agentType: "pi", agentTitle: "Analyze internal/subagent",
 			agentEvents: []agentEv{
 				{kind: "tool_call", content: "read /a/very/long/path/that/keeps/going/internal/subagent/orchestrator.go"},
@@ -244,6 +252,35 @@ func TestFrameIntegrityOnRealContent(t *testing.T) {
 					strings.Contains(plain, "\x1b") {
 					t.Fatalf("%s: escape codes leaked into the visible text", label)
 				}
+			}
+		}
+	}
+}
+
+// TestExplorationFoldKeepsFrameIntegrity renders the folded transcript through a
+// real frame. A fold replaces N cards with one line, which is the kind of change
+// that can quietly break I1: the summary row is assembled from separately styled
+// fragments, so a missing reset makes it measure wider than it renders.
+func TestExplorationFoldKeepsFrameIntegrity(t *testing.T) {
+	for _, w := range []int{60, 80, 120} {
+		for _, h := range []int{24, 30} {
+			m := newTestModel(t)
+			m.width, m.height = w, h
+			m.applyResize()
+			m.chatModel.Messages = explorationMsgs()
+			m.syncPalette()
+
+			frame := m.View().Content
+			for row, line := range strings.Split(frame, "\n") {
+				if got := ansi.StringWidth(line); got != w {
+					t.Fatalf("%dx%d row %d width = %d, want %d\n%q",
+						w, h, row, got, w, ansi.Strip(line))
+				}
+			}
+			// The fold must actually be on screen, or this test passes on a frame
+			// that never exercised the grouped path.
+			if !strings.Contains(ansi.Strip(frame), "Explored") {
+				t.Errorf("%dx%d: the exploration fold did not reach the frame", w, h)
 			}
 		}
 	}

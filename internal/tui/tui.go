@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -56,6 +57,16 @@ type model struct {
 	// theme explicitly. Detection never overrides an explicit choice.
 	bgDetected bool
 
+	// msgLineOffsets maps a message index to the first line it occupies in the
+	// last rendered transcript, with a trailing entry one past the end. View
+	// refreshes it each frame; /timeline reads it to turn a chosen turn into a
+	// scroll offset.
+	//
+	// It is a sidecar rather than a return value of ChatModel.renderMessages
+	// because nearly every existing caller wants only the text, and threading a
+	// fourth return through all of them would be noise for one consumer.
+	msgLineOffsets []int
+
 	// Active /plan worktree. Planning artifacts remain isolated until the
 	// planner completes, then the branch is merged and the backup ref retained.
 	planWorktreeAgentID string
@@ -95,6 +106,17 @@ type model struct {
 	lastPrompt       string
 	lastMentions     []string
 	lastPromptFailed bool
+
+	// expandedAgent is the subagent whose card shows its full event stream, empty
+	// when every card uses the normal window. At most one at a time.
+	expandedAgent string
+
+	// escArmedUntil is when the first Esc's interrupt confirmation expires. A
+	// deadline rather than the time of the last press: the rule is "a second Esc
+	// within escArmWindow", and comparing against an absolute instant makes that
+	// readable at the call site instead of requiring the reader to do the
+	// subtraction. Zero means no pending confirmation.
+	escArmedUntil time.Time
 
 	// Agent face renderer with mood expressions.
 	face *FaceRenderer
@@ -301,13 +323,29 @@ func listGitBranches(workDir string) []string {
 // searchPopupState is a unified search window for slash commands and history.
 // The mode determines what items are shown and how they are selected.
 type searchPopupState struct {
-	mode      searchMode   // "commands" or "history"
+	mode      searchMode   // "commands", "history", "agents", or a picker
 	entries   []SearchItem // all items (commands or history entries)
 	filtered  []SearchItem // filtered by search query
 	selected  int          // currently selected index in filtered list
 	search    string       // current search query
 	height    int          // popup height (number of visible items)
 	scrollOff int          // scroll offset when more entries than height
+	// payload carries the state a picker must remember across keystrokes but
+	// must not lose when the list is filtered or the selection moves. Nil in
+	// modes that need none.
+	payload *searchPopupPayload
+}
+
+// searchPopupPayload is the per-mode state a previewing picker owns.
+//
+// Picking a theme previews it by mutating the real ThemeManager, so Esc has to
+// put back exactly what was there before the popup opened. Both fields are
+// captured once at open time, not per keystroke: re-capturing on every move
+// would make the "original" whatever the last preview left behind, and Esc
+// would revert to the theme the user was already looking at.
+type searchPopupPayload struct {
+	originalTheme      string
+	originalBgDetected bool
 }
 
 // searchMode determines what the popup displays.
@@ -316,12 +354,32 @@ type searchMode string
 const (
 	searchModeCommands searchMode = "commands"
 	searchModeHistory  searchMode = "history"
+	searchModeAgents   searchMode = "agents"
+	searchModeThemes   searchMode = "themes"
+	searchModeModels   searchMode = "models"
+	searchModeTimeline searchMode = "timeline"
 )
 
-// SearchItem represents an item in the search popup (command or history entry).
+// SearchItem represents an item in the search popup (command, history entry, or
+// subagent).
 type SearchItem struct {
-	Text        string // the command or history text
-	Description string // for commands: the description
+	Text        string // the command, history text, or agent title
+	Description string // for commands: the description; for agents: status/duration
+	// AgentID is set for subagent rows only. It is what makes a row actionable:
+	// accepting one expands that agent's card, and Ctrl+X cancels that agent by
+	// ID rather than by whatever happens to be selected in the orchestrator.
+	AgentID string
+	// Running marks a subagent row whose agent can still be canceled. The
+	// orchestrator refuses a non-running agent, so the picker gates the key on
+	// this rather than surfacing that refusal as an error.
+	Running bool
+	// MessageIdx is the index into ChatModel.Messages a row jumps to. Only the
+	// timeline sets it; the row text is a turn number, and this is what that
+	// number means.
+	MessageIdx int
+	// Icon is a leading glyph for rows whose meaning is visual rather than
+	// textual — a theme's light/dark variant. Empty rows get the plain prefix.
+	Icon string
 }
 
 // searchPopupChrome is the number of rows the search popup reserves for chrome
@@ -395,6 +453,36 @@ func (m *model) newSearchPopup(mode searchMode) {
 		for i, e := range entries {
 			items[len(entries)-1-i] = SearchItem{Text: e.Text}
 		}
+
+	case searchModeAgents:
+		if m.cfg.Orchestrator == nil {
+			return
+		}
+		items = agentSearchItems(m.cfg.Orchestrator.List())
+		if len(items) == 0 {
+			return
+		}
+
+	case searchModeModels:
+		items = modelSearchItems(m.cfg)
+		if len(items) == 0 {
+			return
+		}
+
+	case searchModeTimeline:
+		items = timelineSearchItems(m.chatModel.Messages)
+		if len(items) == 0 {
+			return
+		}
+
+	case searchModeThemes:
+		if m.themeManager == nil {
+			return
+		}
+		items = themeSearchItems(m.themeManager.List(), m.themeManager.CurrentName())
+		if len(items) == 0 {
+			return
+		}
 	}
 
 	availableRows := m.messageViewportHeight()
@@ -415,6 +503,203 @@ func (m *model) newSearchPopup(mode searchMode) {
 		height:    popupHeight,
 		scrollOff: 0,
 	}
+
+	// A previewing picker captures what to revert to before it changes
+	// anything. Captured at open, not per keystroke.
+	if mode == searchModeThemes {
+		// Open on the theme in use. Opening is not a choice, so the picker must
+		// not repaint the TUI just because it appeared; it also makes Esc a true
+		// no-op when the user moved nowhere.
+		for i, item := range items {
+			if item.Text == m.themeManager.CurrentName() {
+				m.searchPopup.selected = i
+				break
+			}
+		}
+		m.searchPopup.payload = &searchPopupPayload{
+			originalTheme:      m.themeManager.CurrentName(),
+			originalBgDetected: m.bgDetected,
+		}
+		m.previewThemeSelection()
+	}
+}
+
+// timelineSearchItems builds the /timeline rows: one per user turn, numbered,
+// with a preview of the prompt.
+//
+// The row text is the turn number rather than the prompt, because accepting a
+// row has to identify a message. The prompt is the description, which is what a
+// user recognizes but cannot be used as a key.
+func timelineSearchItems(msgs []message) []SearchItem {
+	var items []SearchItem
+	turn := 0
+	for i := range msgs {
+		if msgs[i].role != "user" {
+			continue
+		}
+		turn++
+		preview := strings.TrimSpace(msgs[i].content)
+		if line := strings.IndexByte(preview, '\n'); line >= 0 {
+			preview = preview[:line]
+		}
+		items = append(items, SearchItem{
+			Text:        strconv.Itoa(turn),
+			Description: clipRunes(preview, 60),
+			MessageIdx:  i,
+		})
+	}
+	return items
+}
+
+// jumpToMessage scrolls the transcript so the given message's first line is at
+// the top of the viewport.
+//
+// Scroll counts from the bottom, so the offset is "how many lines follow the
+// message's start". The offsets come from the last frame's render; a jump before
+// any frame has been composed falls back to no movement rather than guessing.
+func (m *model) jumpToMessage(idx int) {
+	if idx < 0 || idx+1 >= len(m.msgLineOffsets) {
+		return
+	}
+	totalLines := m.msgLineOffsets[len(m.msgLineOffsets)-1]
+	if totalLines <= 0 {
+		return
+	}
+	start := m.msgLineOffsets[idx]
+	available := m.messageViewportHeight()
+	// Leave the message's first line at the top: everything after it is still
+	// below the viewport, which is what "jump to this turn" means.
+	//
+	// No upper clamp is needed. start is never negative, so the result cannot
+	// exceed totalLines-available, which is exactly the largest offset
+	// clipMessagesToViewport can scroll to. MaxScroll is deliberately not used
+	// here: it takes the terminal height and subtracts its own chrome, so passing
+	// it the already-reduced viewport height double-counted the chrome and clamped
+	// every jump short of its target.
+	scroll := totalLines - start - available
+	if scroll < 0 {
+		scroll = 0
+	}
+	m.chatModel.Scroll = scroll
+}
+
+// modelSearchItems builds the model picker rows from the configured roles.
+//
+// Roles, not a provider model list: a role is the thing the rest of the app
+// resolves a model through, so switching a role is switchable through the
+// existing path with no new plumbing. Listing a provider's catalog here would
+// offer models that no configured role or provider credentials can reach.
+//
+// The row text is the role name, which is exactly what switchModelTarget
+// accepts, so accepting a row and typing "/model <row>" take the same code path.
+func modelSearchItems(cfg Config) []SearchItem {
+	names := make([]string, 0, len(cfg.Roles))
+	for name := range cfg.Roles {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	items := make([]SearchItem, 0, len(names))
+	for _, name := range names {
+		rc := cfg.Roles[name]
+		if rc.Model == "" {
+			// A role with no model has nothing to switch to; offering it would
+			// produce a "role has no model configured" dead end.
+			continue
+		}
+		var desc strings.Builder
+		desc.WriteString(rc.Model)
+		if rc.Provider != "" {
+			fmt.Fprintf(&desc, " · %s", rc.Provider)
+		}
+		// The marker the /model text uses: the active role, or the default one
+		// when no explicit role is configured.
+		if name == cfg.ActiveRole || (cfg.ActiveRole == "" && name == "default") {
+			desc.WriteString(" · active")
+		}
+		items = append(items, SearchItem{Text: name, Description: desc.String()})
+	}
+	return items
+}
+
+// previewThemeSelection applies the highlighted theme so moving through the
+// picker shows the TUI in each one, without persisting anything.
+//
+// It mutates the live ThemeManager, which is why the picker keeps the theme it
+// opened with in its payload: previewing is indistinguishable from choosing
+// until Esc puts the original back.
+func (m *model) previewThemeSelection() {
+	if m.searchPopup == nil || m.searchPopup.mode != searchModeThemes {
+		return
+	}
+	sp := m.searchPopup
+	if sp.selected < 0 || sp.selected >= len(sp.filtered) {
+		return
+	}
+	name := sp.filtered[sp.selected].Text
+	if m.themeManager.CurrentName() == name {
+		return
+	}
+	if err := m.themeManager.SetTheme(name); err != nil {
+		return
+	}
+	m.bgDetected = true
+	m.applyTheme()
+}
+
+// commitThemeSelection persists the previewed theme and closes the picker.
+func (m *model) commitThemeSelection() {
+	sp := m.searchPopup
+	if sp == nil || sp.selected < 0 || sp.selected >= len(sp.filtered) {
+		return
+	}
+	name := sp.filtered[sp.selected].Text
+	if m.themeManager.CurrentName() != name {
+		if err := m.themeManager.SetTheme(name); err != nil {
+			return
+		}
+	}
+	saveThemeToConfig(name)
+	m.bgDetected = true
+	m.applyTheme()
+	m.searchPopup = nil
+	m.setFlash("theme: " + name)
+}
+
+// revertThemeSelection puts back the theme the picker opened with, so Esc after
+// a few previews leaves no trace.
+func (m *model) revertThemeSelection() {
+	sp := m.searchPopup
+	if sp == nil || sp.payload == nil {
+		m.searchPopup = nil
+		return
+	}
+	if m.themeManager != nil {
+		if err := m.themeManager.SetTheme(sp.payload.originalTheme); err == nil {
+			m.bgDetected = sp.payload.originalBgDetected
+			m.applyTheme()
+		}
+	}
+	m.searchPopup = nil
+}
+
+// themeSearchItems builds the theme picker rows: a variant icon, the theme name,
+// and its display name. The active theme is marked so a user who opened the
+// picker can tell what they were already on without moving the cursor.
+func themeSearchItems(themes []Theme, current string) []SearchItem {
+	items := make([]SearchItem, 0, len(themes))
+	for _, t := range themes {
+		icon := "🌙"
+		if t.ThemeType == "light" {
+			icon = "☀️"
+		}
+		desc := t.DisplayName
+		if t.Name == current {
+			desc += " · current"
+		}
+		items = append(items, SearchItem{Text: t.Name, Description: desc, Icon: icon})
+	}
+	return items
 }
 
 // refreshSearchPopupHeight recomputes the popup's visible item count after
@@ -473,6 +758,15 @@ func (m *model) allSearchCandidates() []CompletionCandidate {
 }
 
 // filterSearch filters items by search query (case-insensitive substring on Text).
+// filterSearch narrows entries by the current query.
+//
+// An empty result stays empty. It used to fall back to sp.entries when nothing
+// matched, on the reasoning that an empty popup is worse than an unfiltered one.
+// That made the popup look broken in the other direction: typing a query with no
+// hits silently redisplayed every entry, so the search appeared to ignore what
+// was typed, and Enter then acted on an entry the query had excluded. Callers
+// already render an explicit "No matching …" row for len(filtered) == 0, so the
+// honest empty list is also the one the UI was built for.
 func (sp *searchPopupState) filterSearch() {
 	if sp.search == "" {
 		sp.filtered = sp.entries
@@ -486,9 +780,6 @@ func (sp *searchPopupState) filterSearch() {
 		if strings.Contains(strings.ToLower(e.Text), q) || strings.Contains(strings.ToLower(e.Description), q) {
 			filtered = append(filtered, e)
 		}
-	}
-	if filtered == nil {
-		filtered = sp.entries // show all if no matches
 	}
 	sp.filtered = filtered
 	sp.selected = 0
@@ -507,6 +798,10 @@ func (m *model) syncPalette() {
 	}
 	m.chatModel.Palette = m.palette
 	m.chatModel.ToolDisplay.Palette = m.palette
+	// Expanded agent selection is read by the card renderer, so it is published
+	// here with the rest of the per-frame render inputs rather than reached for
+	// from inside the renderer.
+	m.chatModel.ToolDisplay.ExpandedAgentID = m.expandedAgent
 	m.inputModel.Palette = m.palette
 	m.matrix.palette = m.palette
 }
@@ -1273,8 +1568,22 @@ func (m *model) handleBranchPopupKey(key tea.Key) (tea.Model, tea.Cmd, bool) {
 	return m, nil, true
 }
 
+// escArmWindow is how long the first Esc's interrupt confirmation stays armed.
+// The value is exactly Ctrl+C's reset window (resetCtrlCCount's 2s), with no
+// margin: the two confirmations are the same gesture twice, and a user should not
+// have to learn two different rhythms for them.
+const escArmWindow = 2 * time.Second
+
 // handleInterruptKey handles the keys that stay live while the agent runs:
-// Esc to dismiss or cancel, Ctrl+C to cancel then quit, and F12 as a no-op.
+// Esc to dismiss a popup or interrupt, Ctrl+C to cancel then quit, and F12 as a
+// no-op.
+//
+// Esc while a turn is running is armed, not immediate. Esc is also how a user
+// backs out of a popup, clears a transient state, or simply changes their mind,
+// and a stray press during a long turn used to throw away minutes of work with no
+// undo — the turn's transcript survives, but the turn itself is gone. The first
+// press therefore buys confirmation (the same shape Ctrl+C has used for quitting)
+// and the second, within escArmWindow, interrupts.
 func (m *model) handleInterruptKey(key tea.Key) (tea.Model, tea.Cmd, bool) {
 	switch {
 	case key.Code == tea.KeyEsc:
@@ -1282,10 +1591,17 @@ func (m *model) handleInterruptKey(key tea.Key) (tea.Model, tea.Cmd, bool) {
 			m.searchPopup = nil
 			return m, nil, true
 		}
-		if m.running {
+		if !m.running {
+			return m, nil, true
+		}
+		if now := time.Now(); !m.escArmedUntil.IsZero() && now.Before(m.escArmedUntil) {
+			m.escArmedUntil = time.Time{}
 			return m, m.cancelAgent(), true
 		}
-		return m, nil, true
+		// First press: arm, and say so. The flash carries no cancel command, so a
+		// user who expected an immediate interrupt sees why nothing happened.
+		m.escArmedUntil = time.Now().Add(escArmWindow)
+		return m, m.setFlash("esc again to interrupt"), true
 
 	case key.Code == 'c' && key.Mod == tea.ModCtrl:
 		if m.running {
@@ -1320,9 +1636,54 @@ func (m *model) handleToggleKey(key tea.Key) (tea.Model, tea.Cmd, bool) {
 		return model, cmd, true
 	}
 
-	// Ctrl+O: toggle compact/expanded tool output.
+	// Ctrl+O: cycle tool verbosity — smart → expanded → compact → smart.
+	//
+	// Smart is the default and the only mode that folds; expanded shows every card
+	// in full; compact one-lines every card. CompactTools is derived from the mode
+	// rather than toggled independently, so the flash and the rendering cannot
+	// disagree about which state the user is in.
 	if key.Code == 'o' && key.Mod == tea.ModCtrl {
-		m.chatModel.ToolDisplay.CompactTools = !m.chatModel.ToolDisplay.CompactTools
+		m.chatModel.ToolDisplay.Verbosity = m.chatModel.ToolDisplay.Verbosity.next()
+		m.chatModel.ToolDisplay.CompactTools = m.chatModel.ToolDisplay.Verbosity == VerbosityCompact
+		// Every card's rendering depends on the mode, and the per-message cache
+		// keys on CompactTools — which does not change between smart and expanded,
+		// so the caches have to be dropped explicitly when the fold state moves.
+		m.chatModel.invalidateRenderCaches()
+		return m, m.setFlash("tools: " + m.chatModel.ToolDisplay.Verbosity.String()), true
+	}
+
+	// Ctrl+X: cancel the subagent selected in the agents picker.
+	//
+	// It is handled here rather than in handleSearchPopupKey because canceling
+	// produces a command (the flash) and that helper returns only a bool. The key
+	// is left alone in every other popup mode: Ctrl+X must not be swallowed as
+	// search text there, and there is nothing for it to act on.
+	if key.Code == 'x' && key.Mod == tea.ModCtrl {
+		if m.searchPopup != nil && m.searchPopup.mode == searchModeAgents {
+			return m, m.cancelSelectedAgent(), true
+		}
+		return nil, nil, false
+	}
+
+	// Ctrl+S: park the draft, or walk down the parked drafts.
+	//
+	// Ctrl+S is unbound in the textarea keymap (unlike Ctrl+T, which transposes a
+	// character), so it is free for this. The rule is: park what the user typed,
+	// and only start popping once there is nothing of their own in the prompt —
+	// either because it is empty or because it holds the draft Ctrl+S just handed
+	// them. Keying the pop on "empty" alone made the stash unwalkable: a restore
+	// leaves the prompt non-empty, so the next press put that same draft back on
+	// top of the stack and the entry underneath was unreachable.
+	if key.Code == 's' && key.Mod == tea.ModCtrl {
+		if m.inputModel.Text == "" || m.inputModel.StashRestored() {
+			if _, ok := m.inputModel.PopStash(); ok {
+				return m, m.setFlash("draft restored"), true
+			}
+			return m, nil, true
+		}
+		if m.inputModel.Stash() {
+			return m, m.setFlash("draft stashed (ctrl+s to pop)"), true
+		}
 		return m, nil, true
 	}
 
@@ -1434,6 +1795,10 @@ func (m *model) handleInputKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.inputModel.Text == prevText {
 		return m, cmd
 	}
+	// The user has edited the prompt, so it is no longer the draft Ctrl+S handed
+	// them. This is what lets the next Ctrl+S reach the stash entry underneath
+	// instead of parking the restored one again.
+	m.inputModel.markStashEdited()
 
 	// The text changed: open or close the popup to match the new prompt.
 	if m.searchPopup != nil && m.searchPopup.mode == searchModeCommands && !m.shouldShowSlashCommandPopup() {
@@ -1455,17 +1820,24 @@ func (m *model) handleSearchPopupKey(key tea.Key) bool {
 	switch key.Code {
 	case tea.KeyUp:
 		sp.selectPrev()
+		m.previewThemeSelection()
 		return true
 	case tea.KeyDown:
 		sp.selectNext()
+		m.previewThemeSelection()
 		return true
 	case tea.KeyTab:
 		sp.selectByTab(key.Mod == tea.ModShift)
+		m.previewThemeSelection()
 		return true
 	case tea.KeyEnter:
 		m.acceptSearchPopupSelection()
 		return true
 	case tea.KeyEsc:
+		if sp.mode == searchModeThemes {
+			m.revertThemeSelection()
+			return true
+		}
 		m.searchPopup = nil
 		return true
 	case tea.KeyBackspace:
@@ -1476,12 +1848,14 @@ func (m *model) handleSearchPopupKey(key tea.Key) bool {
 		}
 		sp.search = sp.search[:len(sp.search)-1]
 		sp.filterSearch()
+		m.previewThemeSelection()
 		return true
 	default:
 		// Type to search (only for printable single characters).
 		if key.Text != "" && len(key.Text) == 1 && key.Mod == 0 {
 			sp.search += key.Text
 			sp.filterSearch()
+			m.previewThemeSelection()
 			return true
 		}
 		return false
@@ -1550,6 +1924,17 @@ func (m *model) acceptSearchPopupSelection() {
 	case searchModeHistory:
 		m.inputModel.SetText(item.Text)
 		m.searchPopup = nil
+	case searchModeAgents:
+		m.expandAgentCard(item.AgentID)
+		m.searchPopup = nil
+	case searchModeThemes:
+		m.commitThemeSelection()
+	case searchModeModels:
+		m.searchPopup = nil
+		m.switchModelTarget(item.Text)
+	case searchModeTimeline:
+		m.searchPopup = nil
+		m.jumpToMessage(item.MessageIdx)
 	}
 }
 
@@ -1578,7 +1963,8 @@ func (m *model) View() tea.View {
 
 	// Render components.
 	m.inputModel.SetWidth(max(0, m.width-3))
-	messagesView, lineKinds := m.chatModel.renderMessages(m.running)
+	messagesView, lineKinds, lineOffsets := m.chatModel.renderMessagesWithOffsets(m.running)
+	m.msgLineOffsets = lineOffsets
 	statusBar := m.statusModel.Render(m.statusRenderInput())
 	inputArea := m.inputModel.View(m.loading)
 	var inputCursor *tea.Cursor
@@ -2599,9 +2985,18 @@ func (m *model) renderSearchPopup(width int) string {
 
 	if len(sp.filtered) == 0 {
 		b.WriteString("\n")
-		if sp.mode == searchModeCommands {
+		switch sp.mode {
+		case searchModeCommands:
 			b.WriteString(st.searchStyle.Width(width).Render("  No matching commands"))
-		} else {
+		case searchModeAgents:
+			b.WriteString(st.searchStyle.Width(width).Render("  No matching subagents"))
+		case searchModeThemes:
+			b.WriteString(st.searchStyle.Width(width).Render("  No matching themes"))
+		case searchModeModels:
+			b.WriteString(st.searchStyle.Width(width).Render("  No matching models"))
+		case searchModeTimeline:
+			b.WriteString(st.searchStyle.Width(width).Render("  No matching turns"))
+		default:
 			b.WriteString(st.searchStyle.Width(width).Render("  No matching history"))
 		}
 		return st.popupStyle.Render(b.String())
@@ -2647,6 +3042,22 @@ func (m *model) searchPopupStyles(mode searchMode, width int) searchPopupStyleSe
 		accent = m.palette.Peach                                // orange for history
 		st.itemStyle = st.itemStyle.Foreground(m.palette.Peach) // orange
 		st.header = "History"
+	case searchModeAgents:
+		accent = m.palette.Mauve
+		st.itemStyle = st.itemStyle.Foreground(m.palette.Mauve)
+		st.header = "Subagents"
+	case searchModeThemes:
+		accent = m.palette.Yellow
+		st.itemStyle = st.itemStyle.Foreground(m.palette.Yellow)
+		st.header = "Themes"
+	case searchModeModels:
+		accent = m.palette.Green
+		st.itemStyle = st.itemStyle.Foreground(m.palette.Green)
+		st.header = "Models"
+	case searchModeTimeline:
+		accent = m.palette.Blue
+		st.itemStyle = st.itemStyle.Foreground(m.palette.Blue)
+		st.header = "Timeline"
 	default:
 		return st
 	}
@@ -2683,8 +3094,15 @@ func writeSearchPopupItems(b *strings.Builder, sp *searchPopupState, st searchPo
 		}
 
 		line := prefix + item.Text
-		// Add description for commands.
-		if item.Description != "" && sp.mode == searchModeCommands {
+		// The icon carries a theme's light/dark variant, which is the one thing
+		// a name cannot say and a user needs before previewing it.
+		if item.Icon != "" {
+			line = prefix + item.Icon + " " + item.Text
+		}
+		// Add the description: for commands it is what the command does, for
+		// subagents it is type, status and duration, for themes it is the display
+		// name. Each is why the row exists, so none is worth rendering without it.
+		if item.Description != "" && sp.mode != searchModeHistory {
 			desc := clipRunes(item.Description, width*50/100)
 			if desc != "" {
 				line += "  " + desc

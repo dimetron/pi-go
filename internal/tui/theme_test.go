@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"image/color"
 	"strings"
 	"testing"
 )
@@ -270,17 +271,79 @@ func TestPaletteForLightThemeRendersDifferently(t *testing.T) {
 	}
 }
 
-// TestPaletteForDarkThemeMatchesDefault ensures the default (dark) theme
-// resolves to the same Mocha palette the renderers used before theming, so
-// existing dark output is byte-for-byte unchanged.
-func TestPaletteForDarkThemeMatchesDefault(t *testing.T) {
+// TestPaletteForDarkThemeOverlaysThemeTokens replaces the older
+// TestPaletteForDarkThemeMatchesDefault, which asserted that the default theme
+// resolved to exactly darkPalette. That was the bug, written down: the default
+// theme is tokyo-night, and every renderer draws from paletteFor, so pinning
+// paletteFor to Mocha meant `/theme tokyo-night` was indistinguishable from the
+// startup screen and the whole 40-theme file was decorative.
+//
+// The contract is now: a dark theme keeps the Mocha palette's *structure* (so
+// roles the theme file does not name stay contrast-checked and dark), and
+// overlays the tokens it does name. Absent tokens must leave the default in
+// place rather than blanking the role.
+func TestPaletteForDarkThemeOverlaysThemeTokens(t *testing.T) {
 	tm := NewThemeManager()
-	dark := paletteFor(tm.Current())
-	if !dark.Valid {
+	if err := tm.SetTheme("tokyo-night"); err != nil {
+		t.Fatalf("SetTheme(tokyo-night) error: %v", err)
+	}
+	got := paletteFor(tm.Current())
+	if !got.Valid {
 		t.Fatal("dark palette should be valid")
 	}
-	if paletteKey(dark) != paletteKey(darkPalette) {
-		t.Errorf("default theme palette key %d != dark default %d",
-			paletteKey(dark), paletteKey(darkPalette))
+
+	// The named tokens must come from the theme file.
+	colors := tm.Colors()
+	for _, tc := range []struct {
+		role string
+		got  color.Color
+		want string
+	}{
+		{"text", got.Text, colors.Text},
+		{"primary", got.Primary, colors.Primary},
+		{"tool", got.Tool, colors.Tool},
+		{"success", got.Success, colors.Success},
+		{"error", got.Error, colors.Error},
+		{"warning", got.Warning, colors.Warning},
+		{"diffAdded", got.DiffAdded, colors.DiffAdded},
+		{"diffRemoved", got.DiffRemoved, colors.DiffRemoved},
+		{"diffAddedText", got.DiffAddedText, colors.DiffAddedText},
+		{"diffRemovedText", got.DiffRemovedText, colors.DiffRemovedText},
+	} {
+		if gotHex := colorString(tc.got); !strings.EqualFold(gotHex, tc.want) {
+			t.Errorf("%s = %s, want the theme's %s", tc.role, gotHex, tc.want)
+		}
+	}
+
+	// An unnamed role must keep the variant default, not go unset. Subtext is
+	// not a theme token; it carries body-adjacent text and so must stay on the
+	// contrast-checked ladder rather than following the theme's comment color.
+	if colorString(got.Subtext) != colorString(darkPalette.Subtext) {
+		t.Errorf("Subtext = %s, want the dark default %s (it is not a themeable role)",
+			colorString(got.Subtext), colorString(darkPalette.Subtext))
+	}
+
+	// The default theme must no longer render identically to bare Mocha, or
+	// /theme would have nothing to change on a fresh session.
+	if paletteKey(got) == paletteKey(darkPalette) {
+		t.Error("default theme palette key equals bare darkPalette; the theme file's tokens are being ignored")
+	}
+}
+
+// TestPaletteForDarkAndLightThemesDiffer checks that every theme resolves to a
+// distinct palette, so switching always repaints. A shared key would leave the
+// previous theme's output in the render cache (renderKey folds paletteKey).
+func TestPaletteForDistinctThemesHaveDistinctKeys(t *testing.T) {
+	tm := NewThemeManager()
+	seen := make(map[uint64]string, tm.ThemeCount())
+	for _, th := range tm.List() {
+		if err := tm.SetTheme(th.Name); err != nil {
+			t.Fatalf("SetTheme(%s) error: %v", th.Name, err)
+		}
+		key := paletteKey(paletteFor(tm.Current()))
+		if prev, ok := seen[key]; ok && prev != th.Name {
+			t.Errorf("themes %q and %q resolve to the same palette key %d", prev, th.Name, key)
+		}
+		seen[key] = th.Name
 	}
 }

@@ -320,7 +320,7 @@ func TestRenderRegularTool_NoTallyForASingleCall(t *testing.T) {
 // otherwise the refreshed card would redraw from the previous poll's cache.
 func TestRenderKey_ChangesWhenAPollFoldsIn(t *testing.T) {
 	base := message{role: "tool", tool: "bash_wait", toolIn: "bg_4: make daily-all", content: "⏳ 5s"}
-	key := func(m message) uint64 { return m.renderKey(100, false, false, false, 0, false) }
+	key := func(m message) uint64 { return m.renderKey(100, false, false, false, 0, false, VerbositySmart) }
 
 	folded := base
 	folded.pollCount = 2

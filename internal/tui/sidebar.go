@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 
 	"github.com/dimetron/pi-go/internal/extension"
@@ -245,51 +246,121 @@ func RenderSidebar(in SidebarRenderInput) string {
 
 	st := newSidebarStyles(paletteOrDark(in.Palette))
 
-	tail := sidebarTailLines(in, innerW, st)
-
 	// Prefer the merged plan view: one section carrying both the progress and
 	// the shape. It is tried first and kept only if the whole thing fits, since
 	// the checklist alone is what a short panel can still show usefully.
 	if in.Graph != nil && len(in.PlanPhases) > 0 {
 		merged := in
 		merged.mergePlanGraph = true
-		head := sidebarHeadLines(merged, innerW, st)
-		if len(head)+len(tail) <= sidebarContentHeight(in) {
-			return sidebarFrame(in, append(head, tail...), w, st)
+		if lines := assembleSidebar(merged, innerW, st); fits(lines, in) {
+			return sidebarFrame(in, lines, w, st)
 		}
 	}
 
-	head := sidebarHeadLines(in, innerW, st)
-
-	// Outside plan mode the diagram annotates the list above it rather than
-	// replacing it — a /run slice checklist is per-slice progress, which the
-	// stage graph does not duplicate — so it is spliced between head and tail.
-	lines := append(head, graphSection(in, len(head)+len(tail), innerW, st)...)
-	lines = append(lines, tail...)
-
-	return sidebarFrame(in, lines, w, st)
+	return sidebarFrame(in, assembleSidebar(in, innerW, st), w, st)
 }
 
-// sidebarHeadLines renders the sections above the SOP diagram.
-func sidebarHeadLines(in SidebarRenderInput, innerW int, st sidebarStyles) []string {
+// fits reports whether lines fit the panel without sidebarFrame clamping them.
+func fits(lines []string, in SidebarRenderInput) bool {
+	return len(lines) <= sidebarContentHeight(in)
+}
+
+// assembleSidebar builds the panel body, folding detail rows when it overflows.
+//
+// sidebarFrame has to clamp: the content is a flat []string and a taller panel
+// would drag the whole frame. Clamping silently was the bug this fold exists to
+// prevent — on a short terminal the last sections simply vanished, with nothing on
+// screen saying more existed.
+//
+// So detail is dropped before information is. Every section keeps its heading row;
+// what a fold removes is the per-item rows underneath it (skill names, MCP servers,
+// A2A agents, memory counters). A heading is the fact that a section has state; the
+// item rows are how much. The heading also carries the count, so the folded panel
+// still answers "did my skills load" and how many.
+//
+// The fold is progressive rather than all-or-nothing: sections are folded from the
+// bottom up, cheapest-to-lose last, so a panel that needs one row gives up one
+// section's detail rather than every section's detail at once.
+func assembleSidebar(in SidebarRenderInput, innerW int, st sidebarStyles) []string {
+	sections := sidebarSections(in, innerW, st)
+	if len(flattenSections(sections)) <= sidebarContentHeight(in) {
+		return flattenSections(sections)
+	}
+
+	foldable := foldableSectionIndexes(in)
+	for _, idx := range foldable {
+		sections[idx] = foldSection(sections[idx], st)
+		if len(flattenSections(sections)) <= sidebarContentHeight(in) {
+			break
+		}
+	}
+	return flattenSections(sections)
+}
+
+// flattenSections concatenates section slices in order.
+func flattenSections(sections [][]string) []string {
 	var out []string
-	for _, section := range [][]string{
+	for _, sec := range sections {
+		out = append(out, sec...)
+	}
+	return out
+}
+
+// foldSection keeps a section's heading and drops its detail rows, marking the cut
+// with a count so the reader can tell a folded section from an empty one.
+//
+// "Detail row" is defined structurally rather than by a per-section marker: a
+// heading is the first line, and every following line that is not the trailing
+// blank separator is detail. That keeps every section builder free of fold
+// bookkeeping.
+func foldSection(sec []string, st sidebarStyles) []string {
+	if len(sec) == 0 {
+		return sec
+	}
+	hidden := 0
+	for _, line := range sec[1:] {
+		if strings.TrimSpace(ansi.Strip(line)) != "" {
+			hidden++
+		}
+	}
+	if hidden == 0 {
+		return sec // already a single-line section
+	}
+	// Keep the section's own trailing separator if it had one, so folding does not
+	// change the panel's vertical rhythm (I5).
+	trailing := ""
+	if n := len(sec); n > 1 && strings.TrimSpace(ansi.Strip(sec[n-1])) == "" {
+		trailing = sec[n-1]
+	}
+	// Reset before appending (I4): sec[0] is already styled, and a style left open
+	// by the heading would bleed into the marker and then into the panel rule.
+	folded := []string{sec[0] + ansi.ResetStyle + st.dim.Render(fmt.Sprintf(" +%d", hidden))}
+	if trailing != "" {
+		folded = append(folded, trailing)
+	}
+	return folded
+}
+
+// sidebarSectionNames names each section in panel order. The order is behavior:
+// identity and repo state sit above the SOP diagram, and the sections below it are
+// ambient status.
+var sidebarSectionNames = []string{
+	"version", "mood", "model", "artifacts", "git", "mode", "graph",
+	"agents", "skills", "memory", "goal", "mcp", "a2a", "loading",
+}
+
+// sidebarSections renders one slice per section, in sidebarSectionNames order.
+// Keeping them separate (rather than concatenated as they are built) is what lets
+// the fold drop one section's detail without touching its neighbors.
+func sidebarSections(in SidebarRenderInput, innerW int, st sidebarStyles) [][]string {
+	return [][]string{
 		sidebarVersionLines(in, innerW, st),
 		sidebarMoodLines(in, st),
 		sidebarModelLines(in, innerW, st),
 		sidebarArtifactLines(in, innerW, st),
 		sidebarGitLines(in, innerW, st),
 		sidebarModeLines(in, innerW, st),
-	} {
-		out = append(out, section...)
-	}
-	return out
-}
-
-// sidebarTailLines renders the sections below the SOP diagram.
-func sidebarTailLines(in SidebarRenderInput, innerW int, st sidebarStyles) []string {
-	var out []string
-	for _, section := range [][]string{
+		graphSection(in, 0, innerW, st),
 		sidebarAgentLines(in, innerW, st),
 		sidebarSkillLines(in, st),
 		sidebarMemoryLines(in, st),
@@ -297,10 +368,42 @@ func sidebarTailLines(in SidebarRenderInput, innerW int, st sidebarStyles) []str
 		sidebarMCPLines(in, innerW, st),
 		sidebarA2ALines(in, innerW, st),
 		sidebarLoadingLines(in, st),
-	} {
-		out = append(out, section...)
 	}
-	return out
+}
+
+// foldableSectionIndexes is the order in which detail is given up when the panel
+// is too short. Bottom-up, and within the tail cheapest-to-lose first.
+//
+// The rule behind the order: a section whose *count* answers the question can be
+// folded safely, and a section whose rows are the point cannot. Skills, MCP and A2A
+// answer "how many are loaded" from the heading alone. Memory and Goal lose real
+// meaning when folded — a cycle counter and a room breakdown are each one line of
+// state — so they are folded later. Artifacts, git, agents and mode are never folded:
+// they are the live workflow state the panel exists to show.
+func foldableSectionIndexes(in SidebarRenderInput) []int {
+	idx := func(name string) int {
+		for i, n := range sidebarSectionNames {
+			if n == name {
+				return i
+			}
+		}
+		return -1
+	}
+	var order []int
+	for _, name := range []string{
+		"loading", // transient; the count is the whole message
+		"skills",
+		"mcp",
+		"a2a",
+		"mood", // decoration: eyes or mascot face
+		"memory",
+		"goal",
+	} {
+		if i := idx(name); i >= 0 {
+			order = append(order, i)
+		}
+	}
+	return order
 }
 
 // graphSection renders the SOP diagram, or nothing when it will not fit.

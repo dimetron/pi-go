@@ -2,6 +2,7 @@ package tui
 
 import (
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -275,5 +276,110 @@ func TestHandleBranchPopupKeyArrowsMoveSelection(t *testing.T) {
 	m.handleBranchPopupKey(tea.Key{Code: tea.KeyUp})
 	if m.branchPopup.selected != 0 {
 		t.Errorf("selected = %d after up, want 0", m.branchPopup.selected)
+	}
+}
+
+// TestEscArmsThenInterrupts pins the two-press interrupt confirmation. Esc is
+// also how a user dismisses a popup or changes their mind, and a single stray
+// press during a long turn used to discard the turn outright.
+func TestEscArmsThenInterrupts(t *testing.T) {
+	m := newTestModel(t)
+	m.running = true
+	m.agentCh = make(chan agentMsg, 1)
+	esc := tea.Key{Code: tea.KeyEsc}
+
+	// First press: armed, not interrupted, and it says so.
+	if _, cmd, handled := m.handleInterruptKey(esc); !handled {
+		t.Fatal("esc should be handled")
+	} else if cmd == nil {
+		t.Error("the first Esc should flash the confirmation, so it must return a command")
+	}
+	if !m.running {
+		t.Fatal("a single Esc must not interrupt")
+	}
+	if m.escArmedUntil.IsZero() {
+		t.Fatal("the first Esc must arm the confirmation")
+	}
+
+	// Second press inside the window: interrupt.
+	if _, _, handled := m.handleInterruptKey(esc); !handled {
+		t.Fatal("esc should be handled")
+	}
+	if m.running {
+		t.Error("the second Esc inside the window must interrupt")
+	}
+	if !m.escArmedUntil.IsZero() {
+		t.Error("the arm must be cleared once it has fired")
+	}
+}
+
+// TestEscArmExpires covers the window itself: after escArmWindow the confirmation
+// is stale, so the next press re-arms rather than interrupting. This is the case a
+// bare "did they press Esc recently" boolean cannot express.
+func TestEscArmExpires(t *testing.T) {
+	m := newTestModel(t)
+	m.running = true
+	m.agentCh = make(chan agentMsg, 1)
+	esc := tea.Key{Code: tea.KeyEsc}
+
+	m.handleInterruptKey(esc)
+	if m.escArmedUntil.IsZero() {
+		t.Fatal("the first Esc must arm")
+	}
+	// Backdate the deadline rather than sleeping: the rule is about the deadline,
+	// not about wall-clock time passing during the test.
+	m.escArmedUntil = time.Now().Add(-time.Millisecond)
+
+	m.handleInterruptKey(esc)
+	if !m.running {
+		t.Error("an Esc after the window expired must re-arm, not interrupt")
+	}
+	if m.escArmedUntil.IsZero() {
+		t.Error("the stale arm should have been replaced by a fresh one")
+	}
+}
+
+// TestEscArmClearedWhenTurnEnds guards the failure that would make the feature
+// harmful: if a first Esc armed and the turn then finished on its own, a stale
+// deadline would let one press interrupt the *next* turn the user starts.
+func TestEscArmClearedWhenTurnEnds(t *testing.T) {
+	m := newTestModel(t)
+	m.running = true
+	m.agentCh = make(chan agentMsg, 1)
+	m.handleInterruptKey(tea.Key{Code: tea.KeyEsc})
+	if m.escArmedUntil.IsZero() {
+		t.Fatal("the first Esc must arm")
+	}
+
+	m.handleAgentDone(agentDoneMsg{})
+	if !m.escArmedUntil.IsZero() {
+		t.Error("a turn that ended on its own must disarm the pending confirmation")
+	}
+
+	// A new turn then needs its own two presses.
+	m.running = true
+	m.handleInterruptKey(tea.Key{Code: tea.KeyEsc})
+	if !m.running {
+		t.Error("the first Esc of a new turn must not interrupt")
+	}
+}
+
+// TestEscDismissesPopupWithoutArming checks that backing out of a popup is not
+// treated as the first half of an interrupt.
+func TestEscDismissesPopupWithoutArming(t *testing.T) {
+	m := newTestModel(t)
+	m.running = true
+	m.agentCh = make(chan agentMsg, 1)
+	m.searchPopup = &searchPopupState{mode: searchModeCommands}
+
+	m.handleInterruptKey(tea.Key{Code: tea.KeyEsc})
+	if m.searchPopup != nil {
+		t.Error("esc should dismiss the popup")
+	}
+	if !m.escArmedUntil.IsZero() {
+		t.Error("dismissing a popup must not arm the interrupt")
+	}
+	if !m.running {
+		t.Error("dismissing a popup must not interrupt the turn")
 	}
 }

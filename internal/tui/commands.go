@@ -127,6 +127,7 @@ var slashCommandSpecs = []slashCommandSpec{
 	{name: "/skill-load", desc: "Reload skills from disk", hidden: true, run: slashCmdBare((*model).handleSkillLoadCommand)},
 	{name: "/skill-create", desc: "Create a new skill", hidden: true, run: (*model).handleSkillCreateCommand},
 	{name: "/theme", desc: "Switch theme or list themes", run: (*model).handleThemeCommand},
+	{name: "/timeline", desc: "Jump to a previous turn", run: slashCmdVoid((*model).handleTimelineCommand)},
 	{name: "/ping", desc: "Test LLM connectivity", run: (*model).handlePingCommand},
 	{name: "/model-price-refresh", desc: "Refresh model prices from models.dev", run: (*model).handleModelPriceRefreshCommand},
 	{name: "/rtk", desc: "Output compaction stats", run: slashCmdArgs((*model).handleRTKCommand)},
@@ -136,13 +137,18 @@ var slashCommandSpecs = []slashCommandSpec{
 }
 
 // slashCommandByName indexes slashCommandSpecs for dispatch and descriptions.
-var slashCommandByName = func() map[string]slashCommandSpec {
-	byName := make(map[string]slashCommandSpec, len(slashCommandSpecs))
+//
+// Filled in init, like slashCommands: as an initializer it formed a cycle with
+// slashCommandSpecs, because a handler opens a search popup and the popup resolves
+// command descriptions through this map.
+var slashCommandByName map[string]slashCommandSpec
+
+func init() {
+	slashCommandByName = make(map[string]slashCommandSpec, len(slashCommandSpecs))
 	for _, spec := range slashCommandSpecs {
-		byName[spec.name] = spec
+		slashCommandByName[spec.name] = spec
 	}
-	return byName
-}()
+}
 
 // showHelpMessage appends the help text as an assistant message.
 func (m *model) showHelpMessage() {
@@ -460,7 +466,11 @@ func formatAgentsList(agents []subagent.AgentStatus) string {
 	return b.String()
 }
 
-// handleAgentsCommand shows the status of running and recent subagents.
+// handleAgentsCommand opens the subagent picker.
+//
+// It used to append the agent list as a chat message, which gave the reader a wall
+// of text they could not act on: the events of a specific agent are on its card,
+// and canceling one needed the ID. Opening the picker makes both reachable.
 func (m *model) handleAgentsCommand() {
 	if m.cfg.Orchestrator == nil {
 		m.chatModel.Messages = append(m.chatModel.Messages, message{
@@ -469,11 +479,18 @@ func (m *model) handleAgentsCommand() {
 		})
 		return
 	}
-
-	m.chatModel.Messages = append(m.chatModel.Messages, message{
-		role:    "assistant",
-		content: formatAgentsList(m.cfg.Orchestrator.List()),
-	})
+	if len(m.cfg.Orchestrator.List()) == 0 {
+		m.chatModel.Messages = append(m.chatModel.Messages, message{
+			role:    "assistant",
+			content: formatAgentsList(nil),
+		})
+		return
+	}
+	if m.searchPopup != nil && m.searchPopup.mode == searchModeAgents {
+		m.searchPopup = nil // second invocation closes, like Ctrl+B's popup
+		return
+	}
+	m.newSearchPopup(searchModeAgents)
 }
 
 // formatModelInfo returns a formatted string showing the current model and all configured roles.
@@ -513,15 +530,35 @@ func (m *model) formatModelInfo() string {
 //   - /model <name>    — switch to the named model (or role if name matches a role)
 func (m *model) handleModelCommand(args []string) (tea.Model, tea.Cmd) {
 	if len(args) == 0 {
-		m.chatModel.Messages = append(m.chatModel.Messages, message{
-			role:    "assistant",
-			content: m.formatModelInfo(),
-		})
+		// A second bare /model closes the picker, matching /theme and /subagents.
+		if m.searchPopup != nil && m.searchPopup.mode == searchModeModels {
+			m.searchPopup = nil
+			return m, nil
+		}
+		// With no configured roles there is nothing to pick from, so fall back
+		// to the informational text rather than opening an empty popup.
+		if len(modelSearchItems(m.cfg)) == 0 {
+			m.chatModel.Messages = append(m.chatModel.Messages, message{
+				role:    "assistant",
+				content: m.formatModelInfo(),
+			})
+			return m, nil
+		}
+		m.newSearchPopup(searchModeModels)
 		return m, nil
 	}
 
-	target := strings.TrimSpace(args[0])
+	m.switchModelTarget(strings.TrimSpace(args[0]))
+	return m, nil
+}
 
+// switchModelTarget switches to a model or configured role and reports the
+// outcome as a chat message.
+//
+// It is separate from handleModelCommand because the picker has to reach the
+// same path: a row accepts a target, and duplicating the resolve-switch-rebuild
+// sequence in the popup would let the two drift on which failures are quiet.
+func (m *model) switchModelTarget(target string) {
 	// Resolve: if target is a configured role name, use that role's model.
 	var modelName, roleName string
 	if rc, ok := m.cfg.Roles[target]; ok {
@@ -536,7 +573,7 @@ func (m *model) handleModelCommand(args []string) (tea.Model, tea.Cmd) {
 			role:    "assistant",
 			content: fmt.Sprintf("Role `%s` has no model configured.", target),
 		})
-		return m, nil
+		return
 	}
 
 	if m.cfg.ModelSwitcher == nil {
@@ -544,7 +581,7 @@ func (m *model) handleModelCommand(args []string) (tea.Model, tea.Cmd) {
 			role:    "assistant",
 			content: "Model switching is not available in this context.",
 		})
-		return m, nil
+		return
 	}
 
 	if m.running {
@@ -552,7 +589,7 @@ func (m *model) handleModelCommand(args []string) (tea.Model, tea.Cmd) {
 			role:    "assistant",
 			content: "Cannot switch model while a response is running. Wait for it to finish or cancel it first.",
 		})
-		return m, nil
+		return
 	}
 
 	newLLM, newName, newProvider, err := m.cfg.ModelSwitcher(m.ctx, modelName)
@@ -561,7 +598,7 @@ func (m *model) handleModelCommand(args []string) (tea.Model, tea.Cmd) {
 			role:    "assistant",
 			content: fmt.Sprintf("Failed to switch model: %s", err),
 		})
-		return m, nil
+		return
 	}
 
 	// Rebuild the agent with the new LLM.
@@ -571,7 +608,7 @@ func (m *model) handleModelCommand(args []string) (tea.Model, tea.Cmd) {
 				role:    "assistant",
 				content: fmt.Sprintf("Failed to rebuild agent: %s", err),
 			})
-			return m, nil
+			return
 		}
 	}
 
@@ -596,7 +633,6 @@ func (m *model) handleModelCommand(args []string) (tea.Model, tea.Cmd) {
 		role:    "assistant",
 		content: sb.String(),
 	})
-	return m, nil
 }
 
 // saveModelToConfig persists the model and provider as the default role in
@@ -1056,6 +1092,23 @@ func formatThemeError(name string, matches []string) string {
 	return msg
 }
 
+// handleTimelineCommand opens the turn picker, or closes it on a second call.
+//
+// It is deliberately not a Ctrl chord: Ctrl+T is the textarea's
+// transpose-character binding, and rebinding it would take away an editing key
+// to add a navigation one.
+func (m *model) handleTimelineCommand() {
+	if m.searchPopup != nil && m.searchPopup.mode == searchModeTimeline {
+		m.searchPopup = nil
+		return
+	}
+	if len(timelineSearchItems(m.chatModel.Messages)) == 0 {
+		m.setFlash("no turns yet")
+		return
+	}
+	m.newSearchPopup(searchModeTimeline)
+}
+
 // handleThemeCommand handles /theme: list themes, switch theme, or show current.
 func (m *model) handleThemeCommand(args []string) (tea.Model, tea.Cmd) {
 	if m.themeManager == nil {
@@ -1067,11 +1120,13 @@ func (m *model) handleThemeCommand(args []string) (tea.Model, tea.Cmd) {
 	}
 
 	if len(args) == 0 {
-		m.chatModel.Messages = append(m.chatModel.Messages, message{
-			role:        "assistant",
-			preRendered: true,
-			content:     formatThemeList(m.themeManager.List(), m.themeManager.CurrentName(), m.palette),
-		})
+		// A second bare /theme closes the picker, matching /subagents and the
+		// Ctrl+B popup; re-running a command should not stack windows.
+		if m.searchPopup != nil && m.searchPopup.mode == searchModeThemes {
+			m.revertThemeSelection()
+			return m, nil
+		}
+		m.newSearchPopup(searchModeThemes)
 		return m, nil
 	}
 
@@ -1223,4 +1278,115 @@ func maskServerURL(url string) string {
 		}
 	}
 	return masked
+}
+
+// agentSearchItems turns the orchestrator's agent list into picker rows.
+//
+// This is a view over state the TUI already holds, not a second source of truth:
+// the orchestrator owns identity, status and timing, while the event stream lives
+// on the chat card. The picker carries only the AgentID across, which is what
+// accepting a row and canceling an agent both need.
+func agentSearchItems(agents []subagent.AgentStatus) []SearchItem {
+	items := make([]SearchItem, 0, len(agents))
+	for _, a := range agents {
+		dur := a.Duration
+		if dur == "" && a.Status == "running" {
+			dur = time.Since(a.StartedAt).Truncate(time.Second).String()
+		}
+		desc := a.Status
+		if dur != "" {
+			desc += " · " + dur
+		}
+		if a.Type != "" {
+			desc = a.Type + " · " + desc
+		}
+		title := strings.TrimSpace(a.Prompt)
+		if i := strings.IndexByte(title, '\n'); i >= 0 {
+			title = title[:i]
+		}
+		if title == "" {
+			title = a.AgentID
+		}
+		items = append(items, SearchItem{
+			Text:        agentStatusIcon(a.Status) + title,
+			Description: desc,
+			AgentID:     a.AgentID,
+			Running:     a.Status == "running",
+		})
+	}
+	// Running first, so a live agent is reachable without scrolling past
+	// everything that already finished.
+	sort.SliceStable(items, func(i, j int) bool {
+		return items[i].Running && !items[j].Running
+	})
+	return items
+}
+
+// expandedAgentID is the subagent whose card is showing its full event stream, if
+// any. Zero means every card uses the normal maxAgentOutputLines window.
+//
+// It lives on the model rather than on each message because expansion is a
+// "which one am I looking at" question, not a property of the card: at most one
+// agent is expanded at a time, and selecting another must collapse the previous.
+func (m *model) expandedAgentID() string { return m.expandedAgent }
+
+// expandAgentCard shows the full event stream for one subagent card.
+//
+// Selecting the already-expanded agent collapses it, so the same picker gesture
+// opens and closes the view.
+func (m *model) expandAgentCard(agentID string) {
+	if agentID == "" {
+		return
+	}
+	if m.expandedAgent == agentID {
+		m.expandedAgent = ""
+		return
+	}
+	for i := range m.chatModel.Messages {
+		if m.chatModel.Messages[i].agentID == agentID {
+			m.expandedAgent = agentID
+			return
+		}
+	}
+	// The orchestrator knows about the agent but this transcript has no card for
+	// it — after a /resume or a compaction the card is gone. Say so rather than
+	// silently doing nothing.
+	m.setFlash("no card for that agent in this transcript")
+}
+
+// cancelSelectedAgent cancels the subagent selected in the agents picker.
+//
+// The orchestrator refuses a non-running agent, and that refusal is surfaced
+// instead of swallowed: a user who pressed Ctrl+X on a finished agent should learn
+// why nothing happened, not watch the popup close as if it had worked.
+func (m *model) cancelSelectedAgent() tea.Cmd {
+	sp := m.searchPopup
+	if sp == nil || sp.mode != searchModeAgents {
+		return nil
+	}
+	if sp.selected < 0 || sp.selected >= len(sp.filtered) {
+		return nil
+	}
+	item := sp.filtered[sp.selected]
+	if item.AgentID == "" {
+		return nil
+	}
+	if m.cfg.Orchestrator == nil {
+		return m.setFlash("subagent system not available")
+	}
+	if err := m.cfg.Orchestrator.Cancel(item.AgentID); err != nil {
+		// Show the orchestrator's own wording: it distinguishes "not found" from
+		// "not running (status: completed)", and the second tells the user the
+		// agent simply finished.
+		return m.setFlash(err.Error())
+	}
+	return m.setFlash("canceled " + shortAgentID(item.AgentID))
+}
+
+// shortAgentID is the 8-character prefix the UI shows for an agent ID.
+func shortAgentID(id string) string {
+	if len(id) <= 8 {
+		return id
+	}
+	return id[:8]
 }
