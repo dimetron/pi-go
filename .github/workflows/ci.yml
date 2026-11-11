@@ -86,14 +86,14 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Install uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           # Cache must stay off: pyproject.toml only lives under the LSP
           # Python fixture, so the action's post-job cache-save step would
           # error with "Cache path ... does not exist" and fail the job.
           enable-cache: false
       - name: Install rustup
-        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
+        uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
         with:
           toolchain: stable
           # Cargo.toml lives under the LSP rust fixture, not the repo root,
@@ -130,14 +130,14 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Install uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           # Cache must stay off: pyproject.toml only lives under the LSP
           # Python fixture, so the action's post-job cache-save step would
           # error with "Cache path ... does not exist" and fail the job.
           enable-cache: false
       - name: Install rustup
-        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
+        uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
         with:
           toolchain: stable
           cache-workspaces: hack/test/lsp/rust
@@ -157,7 +157,7 @@ jobs:
       - name: Coverage report
         run: go tool cover -func=coverage.out
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: coverage.out
           fail_ci_if_error: false
