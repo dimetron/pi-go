@@ -1,0 +1,46 @@
+---
+title: "The /goal loop: what the user sees"
+---
+stateDiagram-v2
+  state "Legend" as legend {
+    lg0: idle
+    lg1: done
+    lg2: stopped
+    lg3: running
+  }
+  class lg0 tan
+  class lg1 blue
+  class lg2 orange
+  class lg3 purple
+  s0: No goal
+  s1: Working on a cycle
+  s2: Goal stopped
+  s3: Goal paused
+  s4: Goal active, idle
+  s5: Goal complete
+  [*] --> s0
+  s0 --> s1: you set a goal or you set a goal while a turn ran
+  s1 --> s2: you press Esc or a cycle ends and the loop decides
+  s1 --> s0: you clear the goal
+  s1 --> s3: you pause the goal
+  s2 --> s0: you clear the goal
+  s2 --> s3: you pause the goal
+  s3 --> s2: you resume, and the budget is spent
+  s3 --> s0: you clear the goal
+  s3 --> s1: you set a goal or you set a goal while a turn ran
+  s1 --> s4: a turn ends that the loop did not start or a turn ends after you replaced its prompt
+  s1 --> s5: a cycle ends and the loop decides
+  s4 --> s1: you send an ordinary prompt
+  s4 --> s2: you press Esc
+  s4 --> s0: you clear the goal
+  s4 --> s3: you pause the goal
+  s2 --> s5: you resume a goal that was already met
+  s3 --> s5: you resume a goal that was already met
+  s5 --> s0: you clear the goal
+  s5 --> s1: you set a goal while a turn ran or you set a goal
+  class s0 tan
+  class s1 purple
+  class s2 orange
+  class s3 orange
+  class s4 purple
+  class s5 blue

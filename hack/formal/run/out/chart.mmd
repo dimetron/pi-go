@@ -1,0 +1,50 @@
+---
+title: "The /run pipeline: what the user sees"
+---
+stateDiagram-v2
+  state "Legend" as legend {
+    lg0: idle
+    lg1: done
+    lg2: failed
+    lg3: risk
+    lg4: active
+  }
+  class lg0 tan
+  class lg1 blue
+  class lg2 orange
+  class lg3 pink
+  class lg4 purple
+  s0: No run
+  s1: Agent working
+  s2: Checking gates
+  s3: Checking the plan was carried out
+  s4: Restarting the agent
+  s5: Run failed
+  s6: Agent working, after a retry
+  s7: Merging
+  s8: Run finished, merged
+  [*] --> s0
+  s0 --> s1: you run a spec
+  s1 --> s2: the agent finishes
+  s1 --> s3: the agent finishes [no gates defined]
+  s3 --> s4: they disagree, and the run retries
+  s2 --> s4: a gate fails, and the run retries
+  s2 --> s5: a gate hangs or a gate fails, and the budget is spent
+  s2 --> s3: the gates pass
+  s4 --> s6: the new agent starts
+  s6 --> s2: the agent finishes
+  s6 --> s3: the agent finishes [no gates defined]
+  s3 --> s7: the checklist and the verdict agree
+  s7 --> s8: the merge lands
+  s7 --> s5: the merge fails
+  s4 --> s5: no agent could be started
+  s3 --> s5: they disagree, and the budget is spent
+  class s0 tan
+  class s1 purple
+  class s2 purple
+  class s3 purple
+  class s4 pink
+  class s5 orange
+  class s6 purple
+  class s7 pink
+  class s8 blue

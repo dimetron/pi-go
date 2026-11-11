@@ -1,0 +1,32 @@
+---
+title: "One subagent, from spawn to verdict"
+---
+stateDiagram-v2
+  state "Legend" as legend {
+    lg0: idle
+    lg1: done
+    lg2: stopped
+    lg3: live
+  }
+  class lg0 tan
+  class lg1 blue
+  class lg2 orange
+  class lg3 purple
+  s0: Not started
+  s1: Running
+  s2: Finishing
+  s3: Stopped, verdict pending
+  s4: Finished, verdict delivered
+  s5: Stopped, verdict delivered
+  [*] --> s0
+  s0 --> s1: a slot frees up and the agent starts
+  s1 --> s2: the process exits
+  s1 --> s3: you cancel it or pi shuts down while it runs
+  s2 --> s4: its verdict is delivered [and it is dropped from the list] or its verdict is delivered
+  s3 --> s5: its verdict is delivered [and it is dropped from the list] or its verdict is delivered
+  class s0 tan
+  class s1 purple
+  class s2 purple
+  class s3 orange
+  class s4 blue
+  class s5 orange
