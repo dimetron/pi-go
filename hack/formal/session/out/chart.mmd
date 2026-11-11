@@ -1,0 +1,55 @@
+---
+title: "A pi session, from launch to exit"
+---
+stateDiagram-v2
+  state "Legend" as legend {
+    lg0: startup
+    lg1: end
+    lg2: stopping
+    lg3: idle
+    lg4: busy
+  }
+  class lg0 tan
+  class lg1 orange
+  class lg2 pink
+  class lg3 blue
+  class lg4 purple
+  s0: Starting up
+  s1: Waiting for you
+  s2: Shutting down
+  s3: Working on your prompt
+  s4: Working, on a goal cycle
+  s5: Session over
+  s6: Working, and a prompt is queued
+  s7: Working, on your replacement prompt
+  s8: Stopping the turn
+  [*] --> s0
+  s0 --> s1: startup completes
+  s0 --> s2: startup fails
+  s1 --> s3: you send a prompt
+  s1 --> s4: you set a goal
+  s1 --> s2: you quit or you press Ctrl+C again within 2s
+  s2 --> s5: pi exits
+  s3 --> s1: the turn ends
+  s3 --> s7: you send a prompt while it works
+  s3 --> s8: you press Esc or you press Ctrl+C while it works or you press Ctrl+C again while it works
+  s4 --> s3: you stop the goal
+  s4 --> s7: you send a prompt while it works
+  s4 --> s8: you press Esc or you press Ctrl+C while it works
+  s6 --> s4: the turn ends, and your queued prompt runs
+  s6 --> s8: you press Esc or you press Ctrl+C while it works
+  s7 --> s1: the turn ends
+  s7 --> s8: you press Esc or you press Ctrl+C while it works or you press Ctrl+C again while it works
+  s7 --> s4: the turn ends, and the goal loop continues
+  s8 --> s1: the turn stops
+  s6 --> s3: the turn ends, and your queued prompt runs
+  s8 --> s3: the turn stops, and your queued prompt runs
+  class s0 tan
+  class s1 blue
+  class s2 orange
+  class s3 purple
+  class s4 purple
+  class s5 orange
+  class s6 purple
+  class s7 purple
+  class s8 pink
