@@ -1,0 +1,27 @@
+---
+title: "A session's history, and the three ways it is cut"
+---
+stateDiagram-v2
+  state "Legend" as legend {
+    lg0: kept
+    lg1: live
+    lg2: rewritten
+  }
+  class lg0 tan
+  class lg1 purple
+  class lg2 blue
+  s0: History kept, between turns
+  s1: History kept, a turn is running
+  s2: History partly compacted, between turns
+  s3: History partly compacted, a turn is running
+  [*] --> s0
+  s0 --> s1: you send a prompt
+  s0 --> s2: space is short, so older history is summarized [between turns] or you run /compact
+  s1 --> s0: you click the context gauge's [x] while it works or the turn ends
+  s2 --> s3: you send a prompt
+  s3 --> s0: you click the context gauge's [x] while it works
+  s3 --> s2: the turn ends
+  class s0 tan
+  class s1 purple
+  class s2 blue
+  class s3 purple

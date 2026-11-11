@@ -83,5 +83,14 @@ sandbox.log
 # report; `states/` holds TLC's fingerprint and state dumps, which are megabytes
 # of binary and must never be committed. check.sh passes -metadir to keep them
 # out of the tree, and this is the backstop for a manual TLC run.
-hack/formal/*/out/
+#
+# The glob is `out/*`, not `out/`: git never descends into an excluded
+# directory, so the negation below could not match a path under `out/`.
+hack/formal/*/out/*
 hack/formal/*/states/
+
+# The drawn chart is checked in so a reader sees the state machine without
+# installing a JDK, TLC and bun. It is a deterministic function of the model and
+# its view module, so `hack/formal/check.sh all --chart` reproduces it byte for
+# byte; the rest of out/ (report, tlc.out) stays regenerated.
+!hack/formal/*/out/chart.mmd
