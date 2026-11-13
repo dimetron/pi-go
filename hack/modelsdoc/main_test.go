@@ -237,3 +237,52 @@ func writeFile(t *testing.T, root, rel, content string) {
 		t.Fatalf("write: %v", err)
 	}
 }
+
+// TestPriceFormattingMatchesCLI pins the price rendering to the same rules the
+// CLI uses. These helpers are copies of internal/cli's, and a drift here would
+// show as a document that disagrees with `pi model list` about the same model —
+// the failure the generator exists to prevent, reintroduced at the last step.
+func TestPriceFormattingMatchesCLI(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		in, out float64
+		want    string
+	}{
+		{"standard rates", 2, 10, "$2.00/$10.00 per 1M"},
+		{"sub-cent input", 0.0025, 0.015, "$0.003/$0.01 per 1M"},
+		{"no price at all", 0, 0, "$—/$— per 1M"},
+		{"output only", 0, 4.4, "$—/$4.40 per 1M"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatModelPrice(provider.PricingModel{Input: tt.in, Output: tt.out})
+			if got != tt.want {
+				t.Errorf("formatModelPrice(%v, %v) = %q, want %q", tt.in, tt.out, got, tt.want)
+			}
+		})
+	}
+
+	// The precision rule is the part a reader would not guess: below a cent the
+	// rate keeps three decimals, because rounding 0.0025 to 0.00 would print a
+	// free model.
+	if got := priceAmount(0.0025); got != "0.003" {
+		t.Errorf("priceAmount(0.0025) = %q, want %q", got, "0.003")
+	}
+	if got := priceAmount(0.01); got != "0.01" {
+		t.Errorf("priceAmount(0.01) = %q, want %q", got, "0.01")
+	}
+}
+
+// TestOllamaCloudPriceKey: the pricing snapshot keys Ollama Cloud models by
+// their base ID, so the tag has to come off before the lookup. Both spellings
+// occur in the catalog: "x:cloud" and "x-<size>-cloud".
+func TestOllamaCloudPriceKey(t *testing.T) {
+	for _, tt := range []struct{ in, want string }{
+		{"deepseek-v4.1-flash:cloud", "deepseek-v4.1-flash"},
+		{"deepseek-v4-flash:0731-cloud", "deepseek-v4-flash:0731"},
+		{"qwen3.5:0.8b", "qwen3.5:0.8b"},
+	} {
+		if got := ollamaCloudPriceKey(tt.in); got != tt.want {
+			t.Errorf("ollamaCloudPriceKey(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
