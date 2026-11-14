@@ -112,6 +112,24 @@ server (`internal/acp/server/kagent_mcp.go`). Two consequences worth knowing:
   `EgressPolicy` in the rendered manifest), and an Agent must reference it via
   `spec.egressPolicyRefs`. Without that reference the policy is inert.
 
+The AgentTemplate also mounts kagent's two built-in MCP servers:
+`kagent-tool-server` (Kubernetes, Helm, Istio, Cilium, Argo Rollouts, Prometheus
+and shell tools, run by a cluster-admin ServiceAccount in the default chart) and
+`kagent-api` (Agent Substrate sandboxes, sessions and checkpoints). They are
+in-cluster `http://` origins, which the rendered `pi-go-tools-egress` policy
+grants along with `https://dl.k8s.io` for kubectl downloads. Give each Agent both
+policies:
+
+```yaml
+spec:
+  egressPolicyRefs:
+    - name: github-egress
+    - name: pi-go-tools-egress
+```
+
+Override the names with `--tool-server`, `--api-server`, `--tools-service` and
+`--tools-egress-name` if your kagent install differs.
+
 ## Option A: local registry (recommended)
 
 The local kagent Kind setup uses a registry reachable as `localhost:5001` from

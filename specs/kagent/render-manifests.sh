@@ -32,6 +32,13 @@ controller_name="kagent-controller"
 # they exist whether or not this render wires up an Agent.
 egress_name="github-egress"
 github_secret="github-mcp-token"
+# kagent's built-in MCP servers (RemoteMCPServer names from the kagent Helm
+# chart), the Service behind the tool server, and the EgressPolicy that lets
+# a BYO actor reach them and dl.k8s.io.
+tool_server="kagent-tool-server"
+api_server="kagent-api"
+tools_service="kagent-tools"
+tools_egress_name="pi-go-tools-egress"
 # Defaults suit the local Kind Substrate; a release renders with --no-env so
 # the published manifest carries no cluster-specific endpoint.
 model="ollama/deepseek-v4-flash:0731-cloud"
@@ -52,6 +59,10 @@ while [ $# -gt 0 ]; do
     --controller)        controller_name="${2:?--controller needs a value}"; shift 2 ;;
     --egress-name)       egress_name="${2:?--egress-name needs a value}"; shift 2 ;;
     --github-secret)     github_secret="${2:?--github-secret needs a value}"; shift 2 ;;
+    --tool-server)       tool_server="${2:?--tool-server needs a value}"; shift 2 ;;
+    --api-server)        api_server="${2:?--api-server needs a value}"; shift 2 ;;
+    --tools-service)     tools_service="${2:?--tools-service needs a value}"; shift 2 ;;
+    --tools-egress-name) tools_egress_name="${2:?--tools-egress-name needs a value}"; shift 2 ;;
     --model)             model="${2:?--model needs a value}"; shift 2 ;;
     --base-url)          base_url="${2:?--base-url needs a value}"; shift 2 ;;
     --no-env)            want_env=0; shift ;;
@@ -103,6 +114,11 @@ render() {
     -e "s|\${PI_GO_MODEL_CONFIG}|${model_config}|g" \
     -e "s|\${PI_GO_EGRESS_NAME}|${egress_name}|g" \
     -e "s|\${PI_GO_GITHUB_SECRET}|${github_secret}|g" \
+    -e "s|\${PI_GO_TOOL_SERVER}|${tool_server}|g" \
+    -e "s|\${PI_GO_API_SERVER}|${api_server}|g" \
+    -e "s|\${PI_GO_TOOLS_SERVICE}|${tools_service}|g" \
+    -e "s|\${PI_GO_TOOLS_EGRESS_NAME}|${tools_egress_name}|g" \
+    -e "s|\${PI_GO_CONTROLLER}|${controller_name}|g" \
     "$template" \
   | PI_GO_ENV_BLOCK="$env_block" awk '
       $0 == "${PI_GO_ENV_BLOCK}---" {
