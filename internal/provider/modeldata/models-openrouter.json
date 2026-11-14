@@ -1,6 +1,6 @@
 {
   "provider": "openrouter",
-  "fetched_at": "2026-11-06T00:00:00Z",
+  "fetched_at": "2026-11-14T00:00:00Z",
   "models": [
     {
       "id": "amazon/nova-2-lite-v1",
@@ -16,7 +16,7 @@
     },
     {
       "id": "amazon/nova-premier-v1",
-      "release_date": "2025-10-31"
+      "release_date": "2025-04-30"
     },
     {
       "id": "amazon/nova-pro-v1",
@@ -33,6 +33,14 @@
     {
       "id": "anthropic/claude-fable-5.1:batch",
       "release_date": "2026-09-01"
+    },
+    {
+      "id": "anthropic/claude-fable-5.2",
+      "release_date": "2026-06-09"
+    },
+    {
+      "id": "anthropic/claude-fable-5.2:batch",
+      "release_date": "2026-06-09"
     },
     {
       "id": "anthropic/claude-haiku-4.5",
@@ -120,7 +128,7 @@
     },
     {
       "id": "fireworks/ember-1",
-      "release_date": "2026-09-24"
+      "release_date": "2026-09-22"
     },
     {
       "id": "google/gemini-2.5-flash",
@@ -243,14 +251,28 @@
       "release_date": "2026-10-13"
     },
     {
+      "id": "google/gemini-4-carbon"
+    },
+    {
+      "id": "google/gemini-4-carbon:batch"
+    },
+    {
+      "id": "google/gemini-4-hydrogen"
+    },
+    {
+      "id": "google/gemini-4-hydrogen:batch"
+    },
+    {
       "id": "google/gemini-nano-banana-2.1",
       "release_date": "2026-10-06"
     },
     {
-      "id": "google/gemini-omni-1.1-flash"
+      "id": "google/gemini-omni-1.1-flash",
+      "release_date": "2026-08-27"
     },
     {
-      "id": "google/gemini-omni-1.2-flash"
+      "id": "google/gemini-omni-1.2-flash",
+      "release_date": "2026-11-05"
     },
     {
       "id": "google/gemma-4-26b-a4b-it",
@@ -285,8 +307,19 @@
       "release_date": "2024-12-06"
     },
     {
+      "id": "meta/muse-ember"
+    },
+    {
+      "id": "meta/muse-spark-1.3",
+      "release_date": "2026-09-02"
+    },
+    {
       "id": "meta/muse-spark-open",
       "release_date": "2026-10-15"
+    },
+    {
+      "id": "meta/muse-wonder",
+      "release_date": "2026-10-12"
     },
     {
       "id": "minimax/minimax-m2.7",
@@ -298,7 +331,7 @@
     },
     {
       "id": "minimax/minimax-m3.1-flash",
-      "release_date": "2026-06-01"
+      "release_date": "2026-10-19"
     },
     {
       "id": "mistralai/codestral-2508",
@@ -326,7 +359,7 @@
     },
     {
       "id": "mistralai/mistral-large-2407",
-      "release_date": "2024-11-19"
+      "release_date": "2024-07-24"
     },
     {
       "id": "mistralai/mistral-large-2512",
@@ -350,11 +383,11 @@
     },
     {
       "id": "mistralai/mistral-medium-3.1",
-      "release_date": "2025-08-13"
+      "release_date": "2025-08-12"
     },
     {
       "id": "mistralai/mistral-nemo",
-      "release_date": "2024-07-01"
+      "release_date": "2024-07-18"
     },
     {
       "id": "mistralai/mistral-saba",
@@ -378,7 +411,7 @@
     },
     {
       "id": "moonshotai/kimi-k2.5",
-      "release_date": "2026-01"
+      "release_date": "2026-01-27"
     },
     {
       "id": "moonshotai/kimi-k3",
@@ -386,7 +419,7 @@
     },
     {
       "id": "moonshotai/kimi-k3.1-pro",
-      "release_date": "2026-07-16"
+      "release_date": "2026-10-23"
     },
     {
       "id": "nvidia/nemotron-3.5-lightning",
@@ -644,24 +677,28 @@
       "release_date": "2026-09-29"
     },
     {
-      "id": "openai/gpt-6.1-terra"
+      "id": "openai/gpt-6.1-terra",
+      "release_date": "2026-10-26"
     },
     {
-      "id": "openai/gpt-6.1-terra-pro"
+      "id": "openai/gpt-6.1-terra-pro",
+      "release_date": "2026-10-26"
     },
     {
-      "id": "openai/gpt-6.1-terra-pro:batch"
+      "id": "openai/gpt-6.1-terra-pro:batch",
+      "release_date": "2026-10-26"
     },
     {
-      "id": "openai/gpt-6.1-terra:batch"
+      "id": "openai/gpt-6.1-terra:batch",
+      "release_date": "2026-10-26"
     },
     {
       "id": "openai/gpt-audio",
-      "release_date": "2026-01-19"
+      "release_date": "2025-08-28"
     },
     {
       "id": "openai/gpt-audio-mini",
-      "release_date": "2026-01-19"
+      "release_date": "2025-10-06"
     },
     {
       "id": "openai/gpt-chat-latest",
@@ -731,21 +768,18 @@
     },
     {
       "id": "qwen/qwen3-coder-30b-a3b-instruct",
-      "release_date": "2025-04"
+      "release_date": "2025-07-31"
     },
     {
       "id": "qwen/qwen3.8-27b",
       "release_date": "2026-08-14"
     },
     {
-      "id": "stealth/crouton-alpha"
-    },
-    {
       "id": "typesafe/jev-router"
     },
     {
       "id": "writer/palmyra-x5",
-      "release_date": "2026-01-21"
+      "release_date": "2025-04-28"
     },
     {
       "id": "x-ai/grok-4.20",
@@ -841,7 +875,7 @@
     },
     {
       "id": "z-ai/glm-5.3-flashx-legal",
-      "release_date": "2026-09-18"
+      "release_date": "2026-11-02"
     },
     {
       "id": "z-ai/glm-5v-turbo",

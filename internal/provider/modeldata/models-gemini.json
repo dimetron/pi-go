@@ -1,6 +1,6 @@
 {
   "provider": "gemini",
-  "fetched_at": "2026-11-06T00:00:00Z",
+  "fetched_at": "2026-11-14T00:00:00Z",
   "models": [
     {
       "id": "antigravity-preview-05-2026",
@@ -66,7 +66,7 @@
     {
       "id": "gemini-3-pro-image-preview",
       "owned_by": "Nano Banana Pro",
-      "release_date": "2025-11-20"
+      "release_date": "2026-05-28"
     },
     {
       "id": "gemini-3.1-flash-image",
@@ -76,7 +76,7 @@
     {
       "id": "gemini-3.1-flash-image-preview",
       "owned_by": "Nano Banana 2",
-      "release_date": "2026-02-26"
+      "release_date": "2026-05-28"
     },
     {
       "id": "gemini-3.1-flash-lite",
@@ -148,19 +148,17 @@
       "release_date": "2026-10-13"
     },
     {
+      "id": "gemini-4-carbon",
+      "owned_by": "Gemini 4 Carbon"
+    },
+    {
+      "id": "gemini-4-hydrogen",
+      "owned_by": "Gemini 4 Hydrogen"
+    },
+    {
       "id": "gemini-embedding-001",
       "owned_by": "Gemini Embedding 001",
       "release_date": "2025-05-20"
-    },
-    {
-      "id": "gemini-embedding-2",
-      "owned_by": "Gemini Embedding 2",
-      "release_date": "2026-04-22"
-    },
-    {
-      "id": "gemini-embedding-2-preview",
-      "owned_by": "Gemini Embedding 2 Preview",
-      "release_date": "2026-04-22"
     },
     {
       "id": "gemini-flash-latest",
@@ -186,7 +184,8 @@
     },
     {
       "id": "gemini-pro-latest",
-      "owned_by": "Gemini Pro Latest"
+      "owned_by": "Gemini Pro Latest",
+      "release_date": "2026-02-19"
     },
     {
       "id": "gemini-robotics-er-2-preview",
