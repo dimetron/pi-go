@@ -1,6 +1,6 @@
 {
   "provider": "openai",
-  "fetched_at": "2026-11-06T00:00:00Z",
+  "fetched_at": "2026-11-14T00:00:00Z",
   "models": [
     {
       "id": "chat-latest",
@@ -8,7 +8,8 @@
     },
     {
       "id": "chatgpt-image-latest",
-      "owned_by": "system"
+      "owned_by": "system",
+      "release_date": "2025-12-16"
     },
     {
       "id": "gpt-4.1",
@@ -277,7 +278,8 @@
     },
     {
       "id": "gpt-6.1-terra",
-      "owned_by": "system"
+      "owned_by": "system",
+      "release_date": "2026-10-26"
     },
     {
       "id": "gpt-audio",
@@ -298,6 +300,11 @@
     {
       "id": "gpt-audio-mini-2025-12-15",
       "owned_by": "system"
+    },
+    {
+      "id": "gpt-image-1.5",
+      "owned_by": "system",
+      "release_date": "2025-11-25"
     },
     {
       "id": "gpt-live-1",

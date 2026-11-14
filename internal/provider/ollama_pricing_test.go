@@ -68,17 +68,21 @@ func TestOllamaCloudPeakCost(t *testing.T) {
 }
 
 func TestOllamaCloudCostUnpricedCache(t *testing.T) {
-	// The page renders "-" for some cache columns; those decode to zero, not a
-	// wrong number.
-	pm, ok := OllamaCloudCost("nemotron-3-nano")
-	if !ok {
-		t.Fatal("OllamaCloudCost(nemotron-3-nano) not found")
-	}
+	// The page renders "-" for some cache columns; those decode to nil and must
+	// become zero rather than a wrong number.
+	//
+	// Exercised through the decode path rather than a model name on purpose.
+	// Which rows show "-" changes with every catalog refresh, and the model this
+	// used to name (nemotron-3-nano) has since left the page entirely, so a named
+	// model couples the test to Ollama's current lineup instead of to the
+	// behavior it describes.
+	input, output := 0.06, 0.24
+	pm := ollamaCloudModel(PricingRate{Input: &input, Output: &output})
 	if pm.CacheRead != 0 {
-		t.Errorf("nemotron-3-nano CacheRead = %v, want 0 (page shows \"-\")", pm.CacheRead)
+		t.Errorf("absent cache_read = %v, want 0", pm.CacheRead)
 	}
-	if pm.Input != 0.06 || pm.Output != 0.24 {
-		t.Errorf("nemotron-3-nano = %v/%v, want 0.06/0.24", pm.Input, pm.Output)
+	if pm.Input != input || pm.Output != output {
+		t.Errorf("rates = %v/%v, want %v/%v", pm.Input, pm.Output, input, output)
 	}
 }
 
