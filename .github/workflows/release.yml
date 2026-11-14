@@ -292,6 +292,25 @@ jobs:
             exit 0
           fi
           gh release edit "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --draft=false
+
+          # Publishing stamps the release as `latest`, which is wrong whenever a
+          # re-run publishes an *older* tag. That is the normal recovery path
+          # this job exists for: a run that failed months ago left a draft, and
+          # re-running it turns that draft public — and GitHub makes it the
+          # release the repository banner links to and /releases/latest returns.
+          # Hand `latest` back to the highest published version so recovery
+          # cannot rewrite the headline. Measured on 2026-11-14: publishing the
+          # v0.1.8/v0.1.9/v0.2.0 drafts made /releases/latest answer v0.2.0.
+          newest="$(gh release list --repo "${GITHUB_REPOSITORY}" --limit 1000 \
+            --exclude-drafts --json tagName,isPrerelease \
+            --jq '.[] | select(.isPrerelease | not) | .tagName' | sort -V | tail -1)"
+          if [ -z "${newest}" ]; then
+            echo "warning: could not determine the newest published tag; leaving 'latest' as published"
+          elif [ "${newest}" != "${GITHUB_REF_NAME}" ]; then
+            echo "${GITHUB_REF_NAME} is not the newest published tag (${newest}); returning 'latest' to it"
+            gh release edit "${newest}" --repo "${GITHUB_REPOSITORY}" --latest
+          fi
+
           gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" \
             --json isDraft,isImmutable,assets \
             --jq '"published: draft=\(.isDraft) immutable=\(.isImmutable) assets=\([.assets[].name] | length)"'
