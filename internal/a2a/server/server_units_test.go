@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -410,6 +411,17 @@ func TestBuildCard(t *testing.T) {
 		card := buildCard("127.0.0.1:8085")
 		if card.Name != "injected" || card.Version != "9.9.9" {
 			t.Errorf("card = %+v, want the injected identity", card)
+		}
+	})
+
+	t.Run("injected part-kind modes become media types", func(t *testing.T) {
+		t.Setenv("KAGENT_AGENT_CARD_JSON", `{"name":"pi_go","defaultInputModes":["text","data","image/png","text/plain"],"defaultOutputModes":["text"]}`)
+		card := buildCard("127.0.0.1:8085")
+		if got, want := card.DefaultInputModes, []string{"text/plain", "application/json", "image/png"}; !slices.Equal(got, want) {
+			t.Errorf("DefaultInputModes = %q, want %q", got, want)
+		}
+		if got, want := card.DefaultOutputModes, []string{"text/plain"}; !slices.Equal(got, want) {
+			t.Errorf("DefaultOutputModes = %q, want %q", got, want)
 		}
 	})
 

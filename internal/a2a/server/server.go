@@ -18,6 +18,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -509,15 +510,42 @@ func extractText(msg *a2a.Message) string {
 	return sb.String()
 }
 
+// partKindMediaTypes maps A2A part kinds to the media type a2a-go assigns to
+// such a part. kagent's compiler writes the card's modes as part kinds
+// (["text"]), but the card enforcer parses each mode as a media type and
+// compares it with every incoming part, so "text" matched no text part
+// ("text/plain") and every SendMessage failed with CONTENT_TYPE_NOT_SUPPORTED.
+var partKindMediaTypes = map[string]string{
+	"text": "text/plain",
+	"data": "application/json",
+}
+
+// mediaTypes rewrites part kinds in modes to media types and keeps real media
+// types as they are.
+func mediaTypes(modes []string) []string {
+	out := make([]string, 0, len(modes))
+	for _, m := range modes {
+		if mt, ok := partKindMediaTypes[strings.ToLower(strings.TrimSpace(m))]; ok {
+			m = mt
+		}
+		if !slices.Contains(out, m) {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
 // buildCard returns the agent card advertised by the server. When the kagent
-// compiler injects KAGENT_AGENT_CARD_JSON, that card is used verbatim (it
-// carries the compiled template identity); otherwise a built-in card with one
-// skill is used so clients that reject empty skill lists (a2a-go's pbconv) can
-// still parse it.
+// compiler injects KAGENT_AGENT_CARD_JSON, that card is used (it carries the
+// compiled template identity) with its modes normalized to media types;
+// otherwise a built-in card with one skill is used so clients that reject
+// empty skill lists (a2a-go's pbconv) can still parse it.
 func buildCard(addr string) *a2a.AgentCard {
 	if raw := strings.TrimSpace(os.Getenv("KAGENT_AGENT_CARD_JSON")); raw != "" {
 		var card a2a.AgentCard
 		if err := json.Unmarshal([]byte(raw), &card); err == nil {
+			card.DefaultInputModes = mediaTypes(card.DefaultInputModes)
+			card.DefaultOutputModes = mediaTypes(card.DefaultOutputModes)
 			return &card
 		}
 	}

@@ -91,6 +91,31 @@ func TestServeAgentCard(t *testing.T) {
 	}
 }
 
+// TestServeSendMessageWithKagentCard reproduces pi-go v0.4.0 on kagent: the
+// compiler injects a card whose modes are the A2A part kind "text", which the
+// card enforcer parses as the media type "text" and so rejected every text
+// part ("text/plain") with CONTENT_TYPE_NOT_SUPPORTED.
+func TestServeSendMessageWithKagentCard(t *testing.T) {
+	t.Setenv("KAGENT_AGENT_CARD_JSON", `{"name":"pi_go","version":"v1","capabilities":{"streaming":true},"defaultInputModes":["text"],"defaultOutputModes":["text"],"skills":[]}`)
+	base, stop := startTestServer(t)
+	defer stop()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cli, err := a2aclient.NewFromEndpoints(ctx, []*a2a.AgentInterface{
+		a2a.NewAgentInterface(base+"/", a2a.TransportProtocolJSONRPC),
+	})
+	if err != nil {
+		t.Fatalf("NewFromEndpoints: %v", err)
+	}
+	defer cli.Destroy()
+
+	msg := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("hello kagent"))
+	if _, err := cli.SendMessage(ctx, &a2a.SendMessageRequest{Message: msg}); err != nil {
+		t.Fatalf("SendMessage with a kagent-injected card: %v", err)
+	}
+}
+
 func TestServeSendMessage(t *testing.T) {
 	base, stop := startTestServer(t)
 	defer stop()
