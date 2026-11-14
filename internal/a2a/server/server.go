@@ -353,15 +353,18 @@ func (e *piExecutor) Execute(ctx context.Context, execCtx *a2asrv.ExecutorContex
 					if res.err != nil {
 						e.logger.Log(ctx, slog.LevelError, "a2a-server: prompt failed",
 							"task", execCtx.TaskID, "err", res.err)
-						yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateFailed,
-							a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart(res.err.Error()))), nil)
+						msg := a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart(res.err.Error()))
+						setTimelinePosition(msg, updater.nextPosition())
+						yield(a2a.NewStatusUpdateEvent(execCtx, a2a.TaskStateFailed, msg), nil)
 						return
 					}
 					// The reply was already streamed as chunks; a final
 					// artifact would duplicate it. Emit one only when the
 					// turn produced text without streaming it.
 					if !updater.streamedText() && strings.TrimSpace(res.result.FinalText) != "" {
-						if !yield(a2a.NewArtifactEvent(execCtx, a2a.NewTextPart(res.result.FinalText)), nil) {
+						final := a2a.NewArtifactEvent(execCtx, a2a.NewTextPart(res.result.FinalText))
+						setTimelinePosition(final.Artifact, updater.nextPosition())
+						if !yield(final, nil) {
 							return
 						}
 					}
