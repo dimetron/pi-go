@@ -106,6 +106,11 @@ func TestOnToolStartSetsDescriptiveTitle(t *testing.T) {
 	if start.Title != "git status" {
 		t.Fatalf("start title = %q, want %q", start.Title, "git status")
 	}
+	// The title is a display string; the tool name rides in _meta for
+	// consumers that need it (the A2A bridge names kagent tool cards by it).
+	if got := start.Meta[ToolNameMetaKey]; got != "bash" {
+		t.Fatalf("start _meta[%s] = %v, want %q", ToolNameMetaKey, got, "bash")
+	}
 }
 
 func TestOnToolStartAndEndSuccess(t *testing.T) {

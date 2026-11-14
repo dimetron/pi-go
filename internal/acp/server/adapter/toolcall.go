@@ -9,6 +9,13 @@ import (
 	acp "github.com/coder/acp-go-sdk"
 )
 
+// ToolNameMetaKey is the _meta key on a tool-call start that carries the
+// registered tool name. The ACP title is a display string (a bash call is
+// titled by its command), so a consumer that needs the tool itself — the A2A
+// bridge names kagent tool cards by it, as kagent's Claude and Codex
+// harnesses do — reads it from here. ACP clients ignore unknown _meta keys.
+const ToolNameMetaKey = "pi.dev/tool-name"
+
 // callState tracks a single tool call across its start/end boundary.
 // Sub-agent parents also accumulate content so nested inner calls can be
 // appended without losing earlier lines — WithUpdateContent replaces the
@@ -135,7 +142,9 @@ func (s *Stream) OnToolStart(ctx context.Context, name string, args map[string]a
 	if loc := locationFromArgs(args); loc != "" {
 		opts = append(opts, acp.WithStartLocations([]acp.ToolCallLocation{{Path: loc}}))
 	}
-	if err := updater.Update(ctx, acp.StartToolCall(id, state.title, opts...)); err != nil {
+	start := acp.StartToolCall(id, state.title, opts...)
+	start.ToolCall.Meta = map[string]any{ToolNameMetaKey: name}
+	if err := updater.Update(ctx, start); err != nil {
 		return string(id), fmt.Errorf("stream: tool-call start: %w", err)
 	}
 	return string(id), nil

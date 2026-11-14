@@ -1,4 +1,4 @@
-.PHONY: vulncheck build install test test-unit test-integration test-e2e test-all test-coverage test-ollama test-gateway-routes check-cve scan sbom lint vet e2e clean sandbox-run sandbox-log eval-run eval-pin eval-judge eval-tools eval-tools-judge record-pgo cache-clean hooks fetch-models fetch-modelsdev-pricing fetch-ollama-pricing
+.PHONY: vulncheck build install test test-unit test-integration test-e2e test-all test-coverage test-ollama test-gateway-routes check-cve scan sbom lint vet e2e clean sandbox-run sandbox-log eval-run eval-pin eval-judge eval-tools eval-tools-judge record-pgo cache-clean hooks fetch-models fetch-modelsdev-pricing fetch-ollama-pricing generate-models-md
 
 # No GOEXPERIMENT=simd: Go 1.27 changed the simd/archsimd intrinsics API, and
 # gomlx/compute's amd64 matmul kernels (gated on
@@ -243,3 +243,10 @@ fetch-modelsdev-pricing:
 .PHONY: fetch-ollama-pricing
 fetch-ollama-pricing:
 	@bash scripts/fetch-ollama-pricing.sh
+
+# generate-models-md: regenerate MODELS.md from the same catalog `pi model list`
+# prints. Needs every provider's API key for the full document; a provider
+# without one keeps the section it already had.
+.PHONY: generate-models-md
+generate-models-md:
+	@go run ./hack/modelsdoc
