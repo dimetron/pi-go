@@ -105,10 +105,10 @@ spec:
   # github.com/<owner>/<repo>/releases/download/... redirects here.
   - origin: https://release-assets.githubusercontent.com
 ---
-# Egress for the in-cluster MCP servers the AgentTemplate declares, and for
-# kubectl downloads. Like the policy above it is inert until an Agent lists it
-# in spec.egressPolicyRefs. An actor's DNS resolves only the hostnames its
-# policies name, so without this the template's tools fail to connect.
+# Egress for the in-cluster MCP servers the AgentTemplate declares. Like the
+# policy above it is inert until an Agent lists it in spec.egressPolicyRefs. An
+# actor's DNS resolves only the hostnames its policies name, so without this
+# the template's tools fail to connect.
 apiVersion: api.kagent.dev/v1alpha3
 kind: EgressPolicy
 metadata:
@@ -118,4 +118,68 @@ spec:
   destinations:
   - origin: http://${PI_GO_TOOLS_SERVICE}.${PI_GO_NAMESPACE}.svc.cluster.local:8084
   - origin: http://${PI_GO_CONTROLLER}.${PI_GO_NAMESPACE}.svc.cluster.local:8083
+---
+# Developer downloads, allowed project by project rather than by wildcard
+# (no *.github.io, no *.googleapis.com). An origin grants its whole host: a
+# rule cannot narrow github.com or ghcr.io to one organisation's paths, so
+# those stay as wide as the hosts themselves. Registry layers on ghcr.io and
+# cr.agentgateway.dev are served from pkg-containers.githubusercontent.com
+# (both answer blob requests with a 307 there). GitHub itself, including
+# release downloads, is in the GitHub policy above.
+apiVersion: api.kagent.dev/v1alpha3
+kind: EgressPolicy
+metadata:
+  name: ${PI_GO_DEVTOOLS_EGRESS_NAME}
+  namespace: ${PI_GO_NAMESPACE}
+spec:
+  destinations:
+  # Kubernetes: kubectl, kubeadm and release binaries; official chart repos
   - origin: https://dl.k8s.io
+  - origin: https://kubernetes.github.io
+  - origin: https://kubernetes-sigs.github.io
+  # kagent and Agent Substrate: docs and install scripts; images and OCI Helm charts on ghcr.io (layers are served from pkg-containers.githubusercontent.com)
+  - origin: https://kagent.dev
+  - origin: https://ghcr.io
+  - origin: https://pkg-containers.githubusercontent.com
+  # agentgateway: docs and install scripts; images and charts (layers also served from pkg-containers.githubusercontent.com)
+  - origin: https://agentgateway.dev
+  - origin: https://cr.agentgateway.dev
+  # Helm
+  - origin: https://get.helm.sh
+  # arkade installer (get.arkade.dev); arkade releases themselves come from github.com (github-egress)
+  - origin: https://get.arkade.dev
+  # arkade get: CLI downloads that are not on github.com (alexellis/arkade pkg/get/tools.go)
+  - origin: https://releases.hashicorp.com
+  - origin: https://mirror.openshift.com
+  - origin: https://storage.googleapis.com
+  - origin: https://static.ampcode.com
+  - origin: https://releases.crossplane.io
+  - origin: https://packages.konghq.com
+  - origin: https://gitlab.com
+  - origin: https://dl.influxdata.com
+  - origin: https://cache.agilebits.com
+  - origin: https://opencode.ai
+  # arkade install: Helm chart repositories (alexellis/arkade pkg/apps)
+  - origin: https://argoproj.github.io
+  - origin: https://bitnami-labs.github.io
+  - origin: https://charts.bitnami.com
+  - origin: https://charts.cockroachdb.com
+  - origin: https://charts.crossplane.io
+  - origin: https://charts.gitlab.io
+  - origin: https://charts.jenkins.io
+  - origin: https://charts.jetstack.io
+  - origin: https://charts.konghq.com
+  - origin: https://confluentinc.github.io
+  - origin: https://crossplaneio.github.io
+  - origin: https://dl.gitea.io
+  - origin: https://falcosecurity.github.io
+  - origin: https://grafana.github.io
+  - origin: https://inlets.github.io
+  - origin: https://kumahq.github.io
+  - origin: https://kyverno.github.io
+  - origin: https://open-policy-agent.github.io
+  - origin: https://openfaas.github.io
+  - origin: https://portainer.github.io
+  - origin: https://prometheus-community.github.io
+  - origin: https://traefik.github.io
+  - origin: https://twuni.github.io

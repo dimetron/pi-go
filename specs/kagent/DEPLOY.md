@@ -117,18 +117,28 @@ The AgentTemplate also mounts kagent's two built-in MCP servers:
 and shell tools, run by a cluster-admin ServiceAccount in the default chart) and
 `kagent-api` (Agent Substrate sandboxes, sessions and checkpoints). They are
 in-cluster `http://` origins, which the rendered `pi-go-tools-egress` policy
-grants along with `https://dl.k8s.io` for kubectl downloads. Give each Agent both
-policies:
+grants.
+
+`pi-go-devtools-egress` allows developer downloads project by project: Kubernetes
+(`dl.k8s.io`, chart repos), kagent and Agent Substrate (`kagent.dev`, `ghcr.io`),
+agentgateway (`agentgateway.dev`, `cr.agentgateway.dev`), Helm, and every host
+`arkade get` and `arkade install` fetch from outside github.com (taken from
+alexellis/arkade `pkg/get/tools.go` and `pkg/apps`). There are no wildcards. An
+origin grants its whole host, so github.com and ghcr.io cannot be narrowed to one
+organisation; that needs a filtering proxy.
+
+Give each Agent the policies it needs:
 
 ```yaml
 spec:
   egressPolicyRefs:
     - name: github-egress
-    - name: pi-go-tools-egress
+    - name: pi-go-tools-egress     # kagent tools + Substrate MCP
+    - name: pi-go-devtools-egress  # downloads
 ```
 
-Override the names with `--tool-server`, `--api-server`, `--tools-service` and
-`--tools-egress-name` if your kagent install differs.
+Override the names with `--tool-server`, `--api-server`, `--tools-service`,
+`--tools-egress-name` and `--devtools-egress-name` if your kagent install differs.
 
 ## Option A: local registry (recommended)
 

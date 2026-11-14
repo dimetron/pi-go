@@ -39,6 +39,9 @@ tool_server="kagent-tool-server"
 api_server="kagent-api"
 tools_service="kagent-tools"
 tools_egress_name="pi-go-tools-egress"
+# Per-project developer download hosts: Kubernetes, kagent and Substrate,
+# agentgateway, Helm and everything arkade get/install fetches.
+devtools_egress_name="pi-go-devtools-egress"
 # Defaults suit the local Kind Substrate; a release renders with --no-env so
 # the published manifest carries no cluster-specific endpoint.
 model="ollama/deepseek-v4-flash:0731-cloud"
@@ -63,6 +66,7 @@ while [ $# -gt 0 ]; do
     --api-server)        api_server="${2:?--api-server needs a value}"; shift 2 ;;
     --tools-service)     tools_service="${2:?--tools-service needs a value}"; shift 2 ;;
     --tools-egress-name) tools_egress_name="${2:?--tools-egress-name needs a value}"; shift 2 ;;
+    --devtools-egress-name) devtools_egress_name="${2:?--devtools-egress-name needs a value}"; shift 2 ;;
     --model)             model="${2:?--model needs a value}"; shift 2 ;;
     --base-url)          base_url="${2:?--base-url needs a value}"; shift 2 ;;
     --no-env)            want_env=0; shift ;;
@@ -118,6 +122,7 @@ render() {
     -e "s|\${PI_GO_API_SERVER}|${api_server}|g" \
     -e "s|\${PI_GO_TOOLS_SERVICE}|${tools_service}|g" \
     -e "s|\${PI_GO_TOOLS_EGRESS_NAME}|${tools_egress_name}|g" \
+    -e "s|\${PI_GO_DEVTOOLS_EGRESS_NAME}|${devtools_egress_name}|g" \
     -e "s|\${PI_GO_CONTROLLER}|${controller_name}|g" \
     "$template" \
   | PI_GO_ENV_BLOCK="$env_block" awk '
