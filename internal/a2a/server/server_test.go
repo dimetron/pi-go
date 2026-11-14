@@ -240,7 +240,7 @@ func TestServeStreamingEvents(t *testing.T) {
 				continue
 			}
 			if text := part.Text(); text != "" {
-				if part.Meta()[adkMetaThoughtKey] == true {
+				if part.Meta()[kagentThoughtKey] == true {
 					sawThought = true
 				}
 				if text == "done" {
@@ -249,11 +249,11 @@ func TestServeStreamingEvents(t *testing.T) {
 				continue
 			}
 			if data, ok := part.Data().(map[string]any); ok {
-				switch part.Meta()[adkMetaTypeKey] {
+				switch part.Meta()[kagentPartTypeKey] {
 				case "function_call":
-					sawToolCall = data["name"] == "git status -s" && data["args"] != nil
+					sawToolCall = data["name"] == "bash" && data["args"] != nil
 				case "function_response":
-					sawToolResult = data["name"] == "git status -s" && data["response"] != nil
+					sawToolResult = data["name"] == "bash" && data["response"] != nil
 				}
 			}
 		}

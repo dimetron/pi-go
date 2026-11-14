@@ -2,12 +2,15 @@ package server
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2aevent"
 	acp "github.com/coder/acp-go-sdk"
+
+	"github.com/dimetron/pi-go/internal/acp/server/adapter"
 )
 
 // applyToTask folds the updater's events into a task the way a2a-go's task
@@ -128,7 +131,8 @@ func TestTextAfterToolCallStartsNewArtifact(t *testing.T) {
 			ToolCallId: "call-1", Title: "bash git status -s",
 		}})
 		_ = u.Update(ctx, acp.SessionUpdate{ToolCallUpdate: &acp.SessionToolCallUpdate{
-			ToolCallId: "call-1", RawOutput: map[string]any{"exit_code": 0},
+			ToolCallId: "call-1", Status: statusPtr(acp.ToolCallStatusCompleted),
+			RawOutput: map[string]any{"exit_code": 0},
 		}})
 		_ = u.Update(ctx, textChunk("all clean"))
 	})
@@ -254,7 +258,7 @@ func TestStreamFramesMatchKagentContract(t *testing.T) {
 	}
 }
 
-// TestThinkingFramesCarryThoughtMeta keeps the adk_thought marker on every
+// TestThinkingFramesCarryThoughtMeta keeps the thought markers on every
 // frame, including the closing replacement, so a client that classifies parts
 // by metadata does not show the last one as an ordinary reply.
 func TestThinkingFramesCarryThoughtMeta(t *testing.T) {
@@ -269,8 +273,10 @@ func TestThinkingFramesCarryThoughtMeta(t *testing.T) {
 	}
 	for i, ev := range events {
 		au := ev.(*a2a.TaskArtifactUpdateEvent)
-		if v, ok := au.Artifact.Parts[0].Meta()[adkMetaThoughtKey].(bool); !ok || !v {
-			t.Errorf("frame %d is missing %s=true", i, adkMetaThoughtKey)
+		for _, key := range []string{kagentThoughtKey, adkMetaThoughtKey} {
+			if v, ok := au.Artifact.Parts[0].Meta()[key].(bool); !ok || !v {
+				t.Errorf("frame %d is missing %s=true", i, key)
+			}
 		}
 	}
 	last := events[2].(*a2a.TaskArtifactUpdateEvent)
@@ -283,18 +289,21 @@ func TestThinkingFramesCarryThoughtMeta(t *testing.T) {
 	}
 }
 
-// TestToolPartsMatchKagentShape pins the data-part shape the kagent UI
-// classifies tool cards by ({name,args} vs {name,response}), with the ADK
-// metadata key kagent's ReadMetadataValue looks for first.
+// TestToolPartsMatchKagentShape pins the parts kagent's Claude and Codex
+// harnesses emit (kagent go/api/a2a/tool_activity.go): the UI renders a data
+// part as a tool card only when kagent.dev/a2a/part-type names it, and reads
+// the card header from the tool name and its body from args / response.result.
 func TestToolPartsMatchKagentShape(t *testing.T) {
 	ctx := context.Background()
 	events, _ := collect(t, func(u *a2aUpdater) {
 		_ = u.Update(ctx, acp.SessionUpdate{ToolCall: &acp.SessionUpdateToolCall{
-			ToolCallId: "call-1", Title: "bash git status -s",
+			ToolCallId: "call-1", Title: "git status -s",
 			RawInput: map[string]any{"command": "git status -s"},
+			Meta:     map[string]any{adapter.ToolNameMetaKey: "bash"},
 		}})
 		_ = u.Update(ctx, acp.SessionUpdate{ToolCallUpdate: &acp.SessionToolCallUpdate{
-			ToolCallId: "call-1", RawOutput: map[string]any{"exit_code": 0},
+			ToolCallId: "call-1", Status: statusPtr(acp.ToolCallStatusCompleted),
+			RawOutput: map[string]any{"exit_code": 0},
 		}})
 	})
 
@@ -302,38 +311,173 @@ func TestToolPartsMatchKagentShape(t *testing.T) {
 		t.Fatalf("frames = %d, want 2", len(events))
 	}
 
-	call := events[0].(*a2a.TaskArtifactUpdateEvent).Artifact.Parts[0]
-	if got, _ := call.Meta()[adkMetaTypeKey].(string); got != "function_call" {
-		t.Errorf("call %s = %q, want function_call", adkMetaTypeKey, got)
-	}
-	callData, ok := call.Data().(map[string]any)
-	if !ok {
-		t.Fatalf("call data = %T, want map[string]any", call.Data())
-	}
-	for _, key := range []string{"name", "args", "id"} {
-		if _, has := callData[key]; !has {
-			t.Errorf("function_call part is missing %q", key)
+	for i, want := range []string{partTypeFunctionCall, partTypeFunctionResponse} {
+		ev := events[i].(*a2a.TaskArtifactUpdateEvent)
+		part := ev.Artifact.Parts[0]
+		for _, key := range []string{kagentPartTypeKey, adkMetaTypeKey} {
+			if got, _ := part.Meta()[key].(string); got != want {
+				t.Errorf("frame %d %s = %q, want %q", i, key, got, want)
+			}
+		}
+		if !ev.LastChunk || ev.Append {
+			t.Errorf("frame %d append=%v lastChunk=%v, want a complete artifact", i, ev.Append, ev.LastChunk)
+		}
+		if _, ok := ev.Artifact.Meta()[kagentTimelineKey].(string); !ok {
+			t.Errorf("frame %d artifact has no %s", i, kagentTimelineKey)
 		}
 	}
-	if callData["name"] != "bash git status -s" {
-		t.Errorf("call name = %v, want the ACP title", callData["name"])
+
+	call := events[0].(*a2a.TaskArtifactUpdateEvent).Artifact.Parts[0].Data().(map[string]any)
+	if call["id"] != "call-1" || call["name"] != "bash" {
+		t.Errorf("call id/name = %v/%v, want call-1/bash", call["id"], call["name"])
+	}
+	if args, _ := call["args"].(map[string]any); args["command"] != "git status -s" {
+		t.Errorf("call args = %v, want the raw input", call["args"])
 	}
 
-	resp := events[1].(*a2a.TaskArtifactUpdateEvent).Artifact.Parts[0]
-	if got, _ := resp.Meta()[adkMetaTypeKey].(string); got != "function_response" {
-		t.Errorf("response %s = %q, want function_response", adkMetaTypeKey, got)
+	resp := events[1].(*a2a.TaskArtifactUpdateEvent).Artifact.Parts[0].Data().(map[string]any)
+	if resp["id"] != "call-1" || resp["name"] != "bash" {
+		t.Errorf("response id/name = %v/%v, want the call's", resp["id"], resp["name"])
 	}
-	respData, ok := resp.Data().(map[string]any)
-	if !ok {
-		t.Fatalf("response data = %T, want map[string]any", resp.Data())
+	response, _ := resp["response"].(map[string]any)
+	result, _ := response["result"].(map[string]any)
+	if result["exit_code"] != float64(0) {
+		t.Errorf("response = %v, want {result: raw output}", resp["response"])
 	}
-	if _, has := respData["response"]; !has {
-		t.Error("function_response part is missing \"response\"")
-	}
-	if respData["name"] != "bash git status -s" {
-		t.Errorf("response name = %v, want the same title as the call", respData["name"])
+	if _, has := response["isError"]; has {
+		t.Error("a completed call must not be marked isError")
 	}
 }
+
+// TestToolNameFallsBackToTitle keeps a start without the tool-name meta — an
+// ACP producer other than pi-go's adapter — named by its display title.
+func TestToolNameFallsBackToTitle(t *testing.T) {
+	ctx := context.Background()
+	events, _ := collect(t, func(u *a2aUpdater) {
+		_ = u.Update(ctx, acp.SessionUpdate{ToolCall: &acp.SessionUpdateToolCall{
+			ToolCallId: "call-1", Title: "Read example.go",
+		}})
+	})
+	if len(events) != 1 {
+		t.Fatalf("frames = %d, want 1", len(events))
+	}
+	data := events[0].(*a2a.TaskArtifactUpdateEvent).Artifact.Parts[0].Data().(map[string]any)
+	if data["name"] != "Read example.go" {
+		t.Errorf("name = %v, want the title", data["name"])
+	}
+}
+
+// TestNonTerminalToolUpdateIsNotAResult pins the subagent case: the adapter
+// re-sends a running subagent's card with each nested call. Those updates
+// carry no terminal status and must not render as results — previously each
+// became a nameless result card and the real result lost its name.
+func TestNonTerminalToolUpdateIsNotAResult(t *testing.T) {
+	ctx := context.Background()
+	events, _ := collect(t, func(u *a2aUpdater) {
+		_ = u.Update(ctx, acp.SessionUpdate{ToolCall: &acp.SessionUpdateToolCall{
+			ToolCallId: "call-1", Title: "subagent: explore",
+			Meta: map[string]any{adapter.ToolNameMetaKey: "subagent"},
+		}})
+		_ = u.Update(ctx, acp.SessionUpdate{ToolCallUpdate: &acp.SessionToolCallUpdate{
+			ToolCallId: "call-1", Content: []acp.ToolCallContent{{
+				Content: &acp.ToolCallContentContent{Type: "content", Content: acp.TextBlock("▶ read(go.mod)")},
+			}},
+		}})
+		_ = u.Update(ctx, acp.SessionUpdate{ToolCallUpdate: &acp.SessionToolCallUpdate{
+			ToolCallId: "call-1", Status: statusPtr(acp.ToolCallStatusInProgress),
+		}})
+		_ = u.Update(ctx, acp.SessionUpdate{ToolCallUpdate: &acp.SessionToolCallUpdate{
+			ToolCallId: "call-1", Status: statusPtr(acp.ToolCallStatusCompleted),
+			RawOutput: "found it",
+		}})
+	})
+
+	if len(events) != 2 {
+		t.Fatalf("frames = %d, want 2 (call, one result)", len(events))
+	}
+	resp := events[1].(*a2a.TaskArtifactUpdateEvent).Artifact.Parts[0].Data().(map[string]any)
+	if resp["name"] != "subagent" {
+		t.Errorf("result name = %v, want the call's name", resp["name"])
+	}
+}
+
+// TestFailedToolResultIsMarked keeps a failed call distinguishable from one
+// that returned nothing: kagent's card reads response.isError.
+func TestFailedToolResultIsMarked(t *testing.T) {
+	ctx := context.Background()
+	events, _ := collect(t, func(u *a2aUpdater) {
+		_ = u.Update(ctx, acp.SessionUpdate{ToolCallUpdate: &acp.SessionToolCallUpdate{
+			ToolCallId: "call-1", Status: statusPtr(acp.ToolCallStatusFailed),
+			RawOutput: map[string]any{"error": "exit status 1"},
+		}})
+	})
+	if len(events) != 1 {
+		t.Fatalf("frames = %d, want 1", len(events))
+	}
+	resp := events[0].(*a2a.TaskArtifactUpdateEvent).Artifact.Parts[0].Data().(map[string]any)
+	response, _ := resp["response"].(map[string]any)
+	if response["isError"] != true {
+		t.Errorf("response = %v, want isError=true", response)
+	}
+}
+
+// TestToolPayloadsAreJSONValues pins the conversion: a tool result can be a Go
+// struct, and the gRPC path converts data parts to a protobuf Struct, which
+// rejects anything but maps, slices and scalars.
+func TestToolPayloadsAreJSONValues(t *testing.T) {
+	type out struct {
+		Stdout string `json:"stdout"`
+	}
+	ctx := context.Background()
+	events, _ := collect(t, func(u *a2aUpdater) {
+		_ = u.Update(ctx, acp.SessionUpdate{ToolCallUpdate: &acp.SessionToolCallUpdate{
+			ToolCallId: "call-1", Status: statusPtr(acp.ToolCallStatusCompleted),
+			RawOutput: out{Stdout: "ok"},
+		}})
+	})
+	resp := events[0].(*a2a.TaskArtifactUpdateEvent).Artifact.Parts[0].Data().(map[string]any)
+	result, ok := resp["response"].(map[string]any)["result"].(map[string]any)
+	if !ok || result["stdout"] != "ok" {
+		t.Errorf("result = %#v, want map[stdout:ok]", resp["response"])
+	}
+}
+
+// TestStoredTaskHasCompleteTimeline pins the reload order: the kagent UI sorts
+// a stored task by timeline position only when every artifact has one, and a
+// text artifact's closing replacement overwrites the metadata its first frame
+// set — so that frame has to carry the position again.
+func TestStoredTaskHasCompleteTimeline(t *testing.T) {
+	ctx := context.Background()
+	events, ec := collect(t, func(u *a2aUpdater) {
+		_ = u.Update(ctx, thoughtChunk("thinking"))
+		_ = u.Update(ctx, textChunk("checking"))
+		_ = u.Update(ctx, acp.SessionUpdate{ToolCall: &acp.SessionUpdateToolCall{ToolCallId: "call-1", Title: "ls"}})
+		_ = u.Update(ctx, acp.SessionUpdate{ToolCallUpdate: &acp.SessionToolCallUpdate{
+			ToolCallId: "call-1", Status: statusPtr(acp.ToolCallStatusCompleted),
+		}})
+		_ = u.Update(ctx, textChunk("done"))
+	})
+
+	task := applyToTask(t, ec.TaskID, events)
+	if len(task.Artifacts) != 5 {
+		t.Fatalf("artifacts = %d, want 5", len(task.Artifacts))
+	}
+	positions := make([]string, len(task.Artifacts))
+	for i, art := range task.Artifacts {
+		p, ok := art.Meta()[kagentTimelineKey].(string)
+		if !ok {
+			t.Fatalf("artifact %d has no %s", i, kagentTimelineKey)
+		}
+		positions[i] = p
+	}
+	// Emission order: thought, text (both opened before the tool), call,
+	// result, then the post-tool text.
+	if !slices.IsSorted(positions) {
+		t.Errorf("positions out of order: %v", positions)
+	}
+}
+
+func statusPtr(s acp.ToolCallStatus) *acp.ToolCallStatus { return &s }
 
 // blockedUpdater returns an updater nobody is draining, with its event buffer
 // already full, so the next emit blocks. Paired with a canceled context that
@@ -410,7 +554,7 @@ func TestEmitErrorsPropagate(t *testing.T) {
 	t.Run("tool end", func(t *testing.T) {
 		u, ctx := blockedUpdater(t)
 		err := u.Update(ctx, acp.SessionUpdate{ToolCallUpdate: &acp.SessionToolCallUpdate{
-			ToolCallId: "call-1",
+			ToolCallId: "call-1", Status: statusPtr(acp.ToolCallStatusCompleted),
 		}})
 		if err == nil {
 			t.Fatal("want an error when the consumer is gone")
@@ -448,7 +592,7 @@ func TestToolNameFallsBackWhenUntitled(t *testing.T) {
 		}})
 		// A result whose call was never seen also falls back.
 		_ = u.Update(ctx, acp.SessionUpdate{ToolCallUpdate: &acp.SessionToolCallUpdate{
-			ToolCallId: "unknown-call",
+			ToolCallId: "unknown-call", Status: statusPtr(acp.ToolCallStatusCompleted),
 		}})
 	})
 
