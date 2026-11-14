@@ -112,6 +112,34 @@ server (`internal/acp/server/kagent_mcp.go`). Two consequences worth knowing:
   `EgressPolicy` in the rendered manifest), and an Agent must reference it via
   `spec.egressPolicyRefs`. Without that reference the policy is inert.
 
+The AgentTemplate also mounts kagent's two built-in MCP servers:
+`kagent-tool-server` (Kubernetes, Helm, Istio, Cilium, Argo Rollouts, Prometheus
+and shell tools, run by a cluster-admin ServiceAccount in the default chart) and
+`kagent-api` (Agent Substrate sandboxes, sessions and checkpoints). They are
+in-cluster `http://` origins, which the rendered `pi-go-tools-egress` policy
+grants.
+
+`pi-go-devtools-egress` allows developer downloads project by project: Kubernetes
+(`dl.k8s.io`, chart repos), kagent and Agent Substrate (`kagent.dev`, `ghcr.io`),
+agentgateway (`agentgateway.dev`, `cr.agentgateway.dev`), Helm, and every host
+`arkade get` and `arkade install` fetch from outside github.com (taken from
+alexellis/arkade `pkg/get/tools.go` and `pkg/apps`). There are no wildcards. An
+origin grants its whole host, so github.com and ghcr.io cannot be narrowed to one
+organisation; that needs a filtering proxy.
+
+Give each Agent the policies it needs:
+
+```yaml
+spec:
+  egressPolicyRefs:
+    - name: github-egress
+    - name: pi-go-tools-egress     # kagent tools + Substrate MCP
+    - name: pi-go-devtools-egress  # downloads
+```
+
+Override the names with `--tool-server`, `--api-server`, `--tools-service`,
+`--tools-egress-name` and `--devtools-egress-name` if your kagent install differs.
+
 ## Option A: local registry (recommended)
 
 The local kagent Kind setup uses a registry reachable as `localhost:5001` from

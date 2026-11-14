@@ -54,6 +54,23 @@ spec:
   systemPrompt: |
     You are pi-go, a helpful coding and Kubernetes assistant.
     Use tools carefully and explain actions briefly.
+  # kagent's built-in MCP servers, both installed by the kagent Helm chart:
+  # - ${PI_GO_TOOL_SERVER}: Kubernetes, Helm, Istio, Cilium, Argo Rollouts and
+  #   Prometheus tools plus a shell, run by the kagent-tools ServiceAccount
+  #   (cluster-admin in the default chart, so every tool here can change the
+  #   cluster).
+  # - ${PI_GO_API_SERVER}: the controller's MCP, with Agent Substrate
+  #   sandboxes, sessions and checkpoints.
+  # A BYO harness reaches them only through the tools EgressPolicy below.
+  tools:
+    - mcp:
+        server:
+          kind: RemoteMCPServer
+          name: ${PI_GO_TOOL_SERVER}
+    - mcp:
+        server:
+          kind: RemoteMCPServer
+          name: ${PI_GO_API_SERVER}
 ---
 # Egress for the MCP servers an AgentTemplate may declare. A BYO runtime gets
 # its credentials from the compiler as KAGENT_ENV[...] placeholders inside
@@ -85,3 +102,84 @@ spec:
   - origin: https://raw.githubusercontent.com
   - origin: https://codeload.github.com
   - origin: https://objects.githubusercontent.com
+  # github.com/<owner>/<repo>/releases/download/... redirects here.
+  - origin: https://release-assets.githubusercontent.com
+---
+# Egress for the in-cluster MCP servers the AgentTemplate declares. Like the
+# policy above it is inert until an Agent lists it in spec.egressPolicyRefs. An
+# actor's DNS resolves only the hostnames its policies name, so without this
+# the template's tools fail to connect.
+apiVersion: api.kagent.dev/v1alpha3
+kind: EgressPolicy
+metadata:
+  name: ${PI_GO_TOOLS_EGRESS_NAME}
+  namespace: ${PI_GO_NAMESPACE}
+spec:
+  destinations:
+  - origin: http://${PI_GO_TOOLS_SERVICE}.${PI_GO_NAMESPACE}.svc.cluster.local:8084
+  - origin: http://${PI_GO_CONTROLLER}.${PI_GO_NAMESPACE}.svc.cluster.local:8083
+---
+# Developer downloads, allowed project by project rather than by wildcard
+# (no *.github.io, no *.googleapis.com). An origin grants its whole host: a
+# rule cannot narrow github.com or ghcr.io to one organisation's paths, so
+# those stay as wide as the hosts themselves. Registry layers on ghcr.io and
+# cr.agentgateway.dev are served from pkg-containers.githubusercontent.com
+# (both answer blob requests with a 307 there). GitHub itself, including
+# release downloads, is in the GitHub policy above.
+apiVersion: api.kagent.dev/v1alpha3
+kind: EgressPolicy
+metadata:
+  name: ${PI_GO_DEVTOOLS_EGRESS_NAME}
+  namespace: ${PI_GO_NAMESPACE}
+spec:
+  destinations:
+  # Kubernetes: kubectl, kubeadm and release binaries; official chart repos
+  - origin: https://dl.k8s.io
+  - origin: https://kubernetes.github.io
+  - origin: https://kubernetes-sigs.github.io
+  # kagent and Agent Substrate: docs and install scripts; images and OCI Helm charts on ghcr.io (layers are served from pkg-containers.githubusercontent.com)
+  - origin: https://kagent.dev
+  - origin: https://ghcr.io
+  - origin: https://pkg-containers.githubusercontent.com
+  # agentgateway: docs and install scripts; images and charts (layers also served from pkg-containers.githubusercontent.com)
+  - origin: https://agentgateway.dev
+  - origin: https://cr.agentgateway.dev
+  # Helm
+  - origin: https://get.helm.sh
+  # arkade installer (get.arkade.dev); arkade releases themselves come from github.com (github-egress)
+  - origin: https://get.arkade.dev
+  # arkade get: CLI downloads that are not on github.com (alexellis/arkade pkg/get/tools.go)
+  - origin: https://releases.hashicorp.com
+  - origin: https://mirror.openshift.com
+  - origin: https://storage.googleapis.com
+  - origin: https://static.ampcode.com
+  - origin: https://releases.crossplane.io
+  - origin: https://packages.konghq.com
+  - origin: https://gitlab.com
+  - origin: https://dl.influxdata.com
+  - origin: https://cache.agilebits.com
+  - origin: https://opencode.ai
+  # arkade install: Helm chart repositories (alexellis/arkade pkg/apps)
+  - origin: https://argoproj.github.io
+  - origin: https://bitnami-labs.github.io
+  - origin: https://charts.bitnami.com
+  - origin: https://charts.cockroachdb.com
+  - origin: https://charts.crossplane.io
+  - origin: https://charts.gitlab.io
+  - origin: https://charts.jenkins.io
+  - origin: https://charts.jetstack.io
+  - origin: https://charts.konghq.com
+  - origin: https://confluentinc.github.io
+  - origin: https://crossplaneio.github.io
+  - origin: https://dl.gitea.io
+  - origin: https://falcosecurity.github.io
+  - origin: https://grafana.github.io
+  - origin: https://inlets.github.io
+  - origin: https://kumahq.github.io
+  - origin: https://kyverno.github.io
+  - origin: https://open-policy-agent.github.io
+  - origin: https://openfaas.github.io
+  - origin: https://portainer.github.io
+  - origin: https://prometheus-community.github.io
+  - origin: https://traefik.github.io
+  - origin: https://twuni.github.io
