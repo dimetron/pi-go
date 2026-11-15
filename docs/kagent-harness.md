@@ -141,8 +141,34 @@ if you switch the harness to `spec.byo`.
 
 ## Model configuration
 
-Set `PI_MODEL` and `PI_BASE_URL` in the Harness `spec.env` to point at the
-provider. The template's `modelConfig` names a kagent `ModelConfig`; on the
-local cluster that is `default-model-config` (Ollama at
-`http://host.docker.internal:11434` from the worker nodes). Keep credentials in
-kagent Secrets, never in the image or manifest.
+The harness follows the model of the AgentTemplate's `modelConfig`. The kagent
+compiler writes it to `KAGENT_CONFIG_JSON` (`agent.model`) and `pi a2a` reads it at
+startup. Precedence, highest first:
+
+1. `--model` / `--url` flags
+2. `PI_MODEL` / `PI_BASE_URL` in the Harness `spec.env` (explicit operator override)
+3. the ModelConfig's model from `KAGENT_CONFIG_JSON`
+4. the built-in default (`glm-5.2:cloud`)
+
+The base URL follows the model: `PI_BASE_URL` / `--url` apply to whichever model wins,
+and the ModelConfig's own endpoint is used only when the model came from the ModelConfig.
+The winning source, model and base URL are written to `~/.pi-go/sessions/a2a-server.err.log`
+(never headers or keys).
+
+| ModelConfig provider | pi-go model | base URL |
+|---|---|---|
+| `ollama`, empty host or ollama.com | `<model>:cloud` (unchanged if already `:cloud`/`-cloud`; a tagged model such as `qwen3:8b` becomes `ollama/qwen3:8b` on `https://api.ollama.com`) | none; the key is `OLLAMA_API_KEY` as for any cloud model |
+| `ollama`, other host | `ollama/<model>` | the host (`ollama.host` in the config, else `OLLAMA_API_BASE`, which kagent sets) |
+| `openai` | `openai/<model>` | `base_url` if set |
+| `anthropic` | `anthropic/<model>` | `base_url` if set |
+| `mistral` | `mistral/<model>` | `base_url` if set |
+| `gemini` | `<model>` | none |
+
+Other providers (Azure OpenAI, Vertex AI, Bedrock, SAP AI Core, Foundry) have no pi-go
+routing from the compiled config: a warning is logged and the default is used. A
+missing, malformed or model-less `KAGENT_CONFIG_JSON` keeps the previous behaviour.
+ModelConfig headers, TLS settings and provider options are not applied.
+
+Before this, the harness ignored the ModelConfig and always ran the default, whatever
+kagent reported. Set `PI_MODEL` only to override the ModelConfig on purpose. Keep
+credentials in kagent Secrets, never in the image or manifest.

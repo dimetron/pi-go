@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -180,4 +181,88 @@ func TestKagentTaskStoreAddressIsExplicitOnly(t *testing.T) {
 			t.Errorf("address = %q, want empty", got)
 		}
 	})
+}
+
+func TestResolveA2AModelPrecedence(t *testing.T) {
+	const kagentCfg = `{"agent":{"model":{"model":"deepseek-v4.1-flash","ollama":{}}}}`
+	const kagentOpenAI = `{"agent":{"model":{"model":"gpt-6-luna","openai":{"base_url":"https://llm.example/v1"}}}}`
+	tests := []struct {
+		name      string
+		flagModel string
+		flagURL   string
+		env       map[string]string
+		wantModel string
+		wantURL   string
+	}{
+		{name: "default", wantModel: "glm-5.2:cloud"},
+		{name: "kagent config", env: map[string]string{"KAGENT_CONFIG_JSON": kagentCfg}, wantModel: "deepseek-v4.1-flash:cloud"},
+		{
+			name:      "PI_MODEL beats kagent config",
+			env:       map[string]string{"KAGENT_CONFIG_JSON": kagentCfg, "PI_MODEL": "glm-5.2:cloud"},
+			wantModel: "glm-5.2:cloud",
+		},
+		{
+			name:      "flag beats PI_MODEL and kagent config",
+			flagModel: "minimax-m3:cloud",
+			env:       map[string]string{"KAGENT_CONFIG_JSON": kagentCfg, "PI_MODEL": "glm-5.2:cloud"},
+			wantModel: "minimax-m3:cloud",
+		},
+		{
+			name:      "kagent endpoint used with kagent model",
+			env:       map[string]string{"KAGENT_CONFIG_JSON": kagentOpenAI},
+			wantModel: "openai/gpt-6-luna",
+			wantURL:   "https://llm.example/v1",
+		},
+		{
+			name:      "PI_BASE_URL overrides kagent endpoint",
+			env:       map[string]string{"KAGENT_CONFIG_JSON": kagentOpenAI, "PI_BASE_URL": "http://gw:1"},
+			wantModel: "openai/gpt-6-luna",
+			wantURL:   "http://gw:1",
+		},
+		{
+			name:      "kagent endpoint not applied to an overriding PI_MODEL",
+			env:       map[string]string{"KAGENT_CONFIG_JSON": kagentOpenAI, "PI_MODEL": "glm-5.2:cloud"},
+			wantModel: "glm-5.2:cloud",
+		},
+		{
+			name:      "flag url beats env url",
+			flagURL:   "http://flag:1",
+			env:       map[string]string{"PI_BASE_URL": "http://env:1"},
+			wantModel: "glm-5.2:cloud",
+			wantURL:   "http://flag:1",
+		},
+		{
+			name:      "malformed kagent config falls back",
+			env:       map[string]string{"KAGENT_CONFIG_JSON": "{nope"},
+			wantModel: "glm-5.2:cloud",
+		},
+		{
+			name:      "unmappable provider falls back",
+			env:       map[string]string{"KAGENT_CONFIG_JSON": `{"agent":{"model":{"model":"m","bedrock":{}}}}`},
+			wantModel: "glm-5.2:cloud",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			getenv := func(k string) string { return tt.env[k] }
+			gotModel, gotURL := resolveA2AModel(tt.flagModel, tt.flagURL, getenv, nil)
+			if gotModel != tt.wantModel || gotURL != tt.wantURL {
+				t.Errorf("got (%q, %q), want (%q, %q)", gotModel, gotURL, tt.wantModel, tt.wantURL)
+			}
+		})
+	}
+}
+
+func TestResolveA2AModelLogsSourceNotSecrets(t *testing.T) {
+	var buf strings.Builder
+	logger := slog.New(&logHandler{f: &buf})
+	env := map[string]string{"KAGENT_CONFIG_JSON": `{"agent":{"model":{"model":"deepseek-v4.1-flash","headers":{"Authorization":"s3cret"},"ollama":{}}}}`}
+	resolveA2AModel("", "", func(k string) string { return env[k] }, logger)
+	out := buf.String()
+	if !strings.Contains(out, "deepseek-v4.1-flash:cloud") || !strings.Contains(out, "kagent ModelConfig") {
+		t.Errorf("log lacks model/source: %q", out)
+	}
+	if strings.Contains(out, "s3cret") {
+		t.Errorf("log leaked header value: %q", out)
+	}
 }

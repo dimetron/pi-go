@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -64,18 +65,7 @@ func runA2AServer(cmd *cobra.Command, _ []string) error {
 		logger = slog.New(&logHandler{f: f})
 	}
 
-	model := flagModel
-	if model == "" {
-		model = os.Getenv("PI_MODEL")
-	}
-	if model == "" {
-		model = "glm-5.2:cloud"
-	}
-
-	baseURL := flagURL
-	if baseURL == "" {
-		baseURL = os.Getenv("PI_BASE_URL")
-	}
+	model, baseURL := resolveA2AModel(flagModel, flagURL, os.Getenv, logger)
 	system := flagSystem
 	if system == "" {
 		system = os.Getenv("PI_SYSTEM")
@@ -157,4 +147,60 @@ func runA2AServer(cmd *cobra.Command, _ []string) error {
 // deployment that knows its controller serves it.
 func kagentTaskStoreAddress() string {
 	return strings.TrimSpace(os.Getenv("KAGENT_TASK_STORE_ADDRESS"))
+}
+
+// defaultA2AModel is used when neither the operator nor kagent names a model.
+const defaultA2AModel = "glm-5.2:cloud"
+
+// resolveA2AModel picks the model and base URL for the A2A server. Precedence,
+// highest first:
+//
+//  1. --model / --url flags
+//  2. PI_MODEL / PI_BASE_URL env (an explicit operator override on the Harness)
+//  3. the model kagent compiled from the AgentTemplate's ModelConfig
+//     (KAGENT_CONFIG_JSON agent.model), so the harness runs the model kagent
+//     reports instead of silently using the built-in default
+//  4. defaultA2AModel
+//
+// The base URL follows the model: PI_BASE_URL and --url apply to whichever
+// model wins, and the ModelConfig's endpoint is only used when the model itself
+// came from the ModelConfig. The winning source and the resolved model and base
+// URL are logged; headers and keys never are.
+func resolveA2AModel(flagModelName, flagBaseURL string, getenv func(string) string, logger *slog.Logger) (model, baseURL string) {
+	logf := func(level slog.Level, format string, args ...any) {
+		if logger != nil {
+			logger.Log(context.Background(), level, fmt.Sprintf(format, args...))
+		}
+	}
+	envURL := getenv("PI_BASE_URL")
+	baseURL = flagBaseURL
+	if baseURL == "" {
+		baseURL = envURL
+	}
+
+	source := "flag --model"
+	model = flagModelName
+	if model == "" {
+		source = "env PI_MODEL"
+		model = getenv("PI_MODEL")
+	}
+	if model == "" {
+		km, ok, reason := acpserver.KagentModelFromEnv(getenv)
+		switch {
+		case ok:
+			source = "kagent ModelConfig (KAGENT_CONFIG_JSON agent.model)"
+			model = km.Model
+			if baseURL == "" {
+				baseURL = km.BaseURL
+			}
+		case reason != "":
+			logf(slog.LevelWarn, "a2a model: ignoring kagent ModelConfig: %s; using default", reason)
+		}
+	}
+	if model == "" {
+		source = "default"
+		model = defaultA2AModel
+	}
+	logf(slog.LevelInfo, "a2a model: %s (source: %s, base_url: %q)", model, source, baseURL)
+	return model, baseURL
 }
