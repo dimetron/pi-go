@@ -226,7 +226,13 @@ func (s *Sandbox) Resolve(name string) (string, error) {
 		return "", fmt.Errorf("path %q escapes sandbox root %s — use absolute paths starting with %s/", name, s.dir, s.dir)
 	}
 
-	return rel, nil
+	// Return the cleaned path, not rel. Two callers (find, grep) hand this
+	// straight to fs.WalkDir on the Root's FS, which requires an fs.ValidPath:
+	// it rejects "./sub" and "sub/./file" with "invalid argument". Both walk
+	// sites discard the walk error, so returning rel made `find ./sub` and
+	// `grep ./` return zero results and a nil error — a silently wrong answer
+	// rather than a failure. filepath.Clean(".", "./sub") is "." and "sub".
+	return cleaned, nil
 }
 
 // resolveWorktreePath handles paths like "../../go.mod" from subagent worktrees.
