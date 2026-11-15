@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"iter"
+	"net/http"
+	"net/http/httptest"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -309,5 +312,129 @@ func TestEnsureFoundationModelsServerTimesOut(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Errorf("took %s; the injected timeout should bound it", elapsed)
+	}
+}
+
+// TestFMReachable covers the probe directly, including the shapes that must NOT
+// count as reachable: an unhealthy server, a non-200, a closed port, and a
+// 404-shaped response. Treating any of those as "already running" would skip the
+// launch and leave the caller talking to nothing.
+func TestFMReachable(t *testing.T) {
+	tests := []struct {
+		name    string
+		status  int
+		path    string
+		want    bool
+		closeIt bool
+	}{
+		{name: "healthy", status: 200, path: "/health", want: true},
+		{name: "non-200", status: 503, path: "/health", want: false},
+		{name: "closed port", closeIt: true, want: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != tc.path {
+					w.WriteHeader(404)
+					return
+				}
+				w.WriteHeader(tc.status)
+			}))
+			if tc.closeIt {
+				srv.Close()
+			} else {
+				defer srv.Close()
+			}
+			if got := fmReachable(srv.URL); got != tc.want {
+				t.Errorf("fmReachable(%s) = %v, want %v", srv.URL, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestFMReachableNormalizesHealthPath pins the URL rewriting: a base URL that
+// already ends in /health must not become /health/health.
+func TestFMReachableNormalizesHealthPath(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	if !fmReachable(srv.URL + "/health") {
+		t.Fatal("fmReachable should report the server reachable")
+	}
+	if gotPath != "/health" {
+		t.Errorf("requested path = %q, want /health", gotPath)
+	}
+}
+
+// TestListFoundationModels drives the live listing against a fake server, which
+// is also where the context window comes from: fm's /v1/models omits it, so a
+// 0 would read as unknown and disable auto-compaction for a known 8192.
+func TestListFoundationModels(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			w.WriteHeader(404)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"system","object":"model"},{"id":"pcc","object":"model"}]}`))
+	}))
+	defer srv.Close()
+
+	models, err := listFoundationModels(context.Background(), ListModelsOptions{BaseURL: srv.URL})
+	if err != nil {
+		t.Fatalf("listFoundationModels: %v", err)
+	}
+	if len(models) != 2 {
+		t.Fatalf("got %d models, want 2", len(models))
+	}
+	for _, m := range models {
+		if m.OwnedBy != "Apple" {
+			t.Errorf("%s owned by %q, want Apple", m.ID, m.OwnedBy)
+		}
+		if m.ContextWindow != 8192 {
+			t.Errorf("%s ContextWindow = %d, want 8192 from the catalog", m.ID, m.ContextWindow)
+		}
+	}
+}
+
+// TestListFoundationModelsServerDown proves a stopped server is reported rather
+// than started: listing models is a question about what exists, and launching a
+// server to answer it would make `pi model list` a side-effecting command.
+func TestListFoundationModelsServerDown(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	url := srv.URL
+	srv.Close()
+
+	if _, err := listFoundationModels(context.Background(), ListModelsOptions{BaseURL: url}); err == nil {
+		t.Fatal("want an error when no server is listening, got nil")
+	}
+}
+
+// TestFoundationModelIDsOrdered pins that the on-device model is offered first:
+// pcc reports itself unavailable unless fm was started from the Terminal app, so
+// a wizard defaulting to the first entry must not pick it.
+func TestFoundationModelIDsOrdered(t *testing.T) {
+	ids := FoundationModelIDs()
+	if len(ids) != 2 {
+		t.Fatalf("got %d ids, want 2", len(ids))
+	}
+	if ids[0] != fmModelSystem {
+		t.Errorf("first id = %q, want %q", ids[0], fmModelSystem)
+	}
+}
+
+// TestLaunchFoundationModelsServerReportsMissingBinary covers the launcher's
+// first failure mode. Runs everywhere by clearing PATH, so it needs no fm.
+func TestLaunchFoundationModelsServerReportsMissingBinary(t *testing.T) {
+	if _, err := exec.LookPath("fm"); err == nil {
+		t.Skip("fm is installed on this machine; the missing-binary path cannot be exercised")
+	}
+	t.Setenv("PATH", t.TempDir())
+	if _, err := launchFoundationModelsServer(); err == nil {
+		t.Fatal("want an error when fm is not on PATH, got nil")
 	}
 }
