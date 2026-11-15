@@ -135,6 +135,8 @@ routing you need:
                                            without a key: the local daemon
   azure/<deployment>       Azure OpenAI    AZUREOPENAI_API_KEY
   opencode/<model>         OpenCode        OPENCODE_API_KEY
+  fm/<model>               Apple Foundation Models
+                                           none; starts fm serve if absent
 
 A name with no recognized prefix is rejected rather than guessed at — reach for
 the ollama/ prefix or the :cloud suffix to name an Ollama model explicitly.
@@ -179,6 +181,12 @@ Set a default in ~/.pi-go/config.json so --model is only needed to deviate;
   # Any OpenAI-compatible gateway, with an extra header and a corporate CA
   pi --url https://llm.corp.internal/v1 --model gpt-5.2 \
      --header X-Team=platform --ca-cert /etc/ssl/corp.pem "run the tests"
+
+  # Apple Foundation Models on-device, via fm serve — started automatically
+  # if nothing is listening on 127.0.0.1:1976. Its 8K window is smaller than
+  # pi-go's coding-agent prompt, so this suits role models and short prompts
+  # rather than a tool-using session.
+  pi --model fm/system --mode print "summarize this changelog"
 
   # One-shot answer instead of the TUI, and resuming a session
   pi --mode print "what changed in the last commit?"
@@ -400,7 +408,7 @@ func resolveRuntimeModelForRole(cfg config.Config, modelName, providerName, acti
 // available. A custom base URL, or a provider that authenticates some other
 // way, is exempt.
 func requireRuntimeAPIKey(info provider.Info, apiKey, baseURL string) error {
-	if apiKey == "" && baseURL == "" && info.Provider != "gemini" && info.Provider != "ollama" && info.Provider != "azure" && info.Provider != "agentgateway" && !info.Ollama {
+	if apiKey == "" && baseURL == "" && info.Provider != "gemini" && info.Provider != "ollama" && info.Provider != "azure" && info.Provider != "agentgateway" && info.Provider != "fm" && !info.Ollama {
 		envVar := providerEnvVar(info.Provider)
 		return fmt.Errorf("no API key found for provider %q (set %s)", info.Provider, envVar)
 	}
@@ -471,6 +479,17 @@ func buildRootRuntime(ctx context.Context, args []string) (rootRuntime, error) {
 	baseURL, err = applyRuntimeOllamaEndpoint(&info, apiKey, baseURL)
 	if err != nil {
 		return rootRuntime{}, err
+	}
+
+	// Bring up the Foundation Models server before building the client, not
+	// during the first turn: the check is a loopback GET, and discovering at
+	// request time that nothing is listening would surface as an opaque
+	// connection reset in the middle of a session. Only the fm provider pays for
+	// it — every other provider skips the probe entirely.
+	if info.Provider == "fm" {
+		if err := provider.EnsureFoundationModelsServer(flagURL); err != nil {
+			return rootRuntime{}, err
+		}
 	}
 
 	llmOpts := &provider.LLMOptions{

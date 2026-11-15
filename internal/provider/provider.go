@@ -323,6 +323,7 @@ var KnownProviderPrefixes = []string{
 	"azure/",
 	"opencode/",
 	"openrouter/",
+	"fm/",
 }
 
 // StripKnownProviderPrefixes removes known provider prefix wrappers from a
@@ -562,6 +563,18 @@ func Resolve(modelName string) (Info, error) {
 		return Info{Provider: "openrouter", Model: modelName[len("openrouter/"):]}, nil
 	}
 
+	// Detect fm/ prefix → Apple Foundation Models, served by a local `fm serve`.
+	// The prefix is stripped; the remainder is the model ID ("system" or "pcc").
+	//
+	// The prefix is required rather than inferred from the bare names: "system"
+	// and "pcc" are ordinary words, and every other provider here resolves by a
+	// name that is unambiguous on its own. A name with no prefix is rejected
+	// rather than guessed at, so a user typing `--model system` gets the usual
+	// "unknown model" instead of a silent trip to a loopback port.
+	if strings.HasPrefix(strings.ToLower(modelName), "fm/") {
+		return Info{Provider: "fm", Model: modelName[len("fm/"):]}, nil
+	}
+
 	// Detect agentgateway/ prefix → agentgateway provider. Checked before the
 	// :cloud/-cloud suffix check below: agentgateway model IDs carry a
 	// "-cloud" tag (e.g. deepseek-v4-flash:0731-cloud) that would otherwise
@@ -606,7 +619,7 @@ func Resolve(modelName string) (Info, error) {
 		}
 	}
 
-	return Info{}, fmt.Errorf("unknown model %q: cannot determine provider (known prefixes: openai, claude, gpt, gemini, mistral, grok, openrouter, agentgateway; use ollama/ prefix for Ollama, or :cloud/-cloud suffix for Ollama cloud)", modelName)
+	return Info{}, fmt.Errorf("unknown model %q: cannot determine provider (known prefixes: openai, claude, gpt, gemini, mistral, grok, openrouter, agentgateway, fm; use ollama/ prefix for Ollama, or :cloud/-cloud suffix for Ollama cloud)", modelName)
 }
 
 func normalizeBaseURL(baseURL string) string {
@@ -802,6 +815,8 @@ func NewLLM(ctx context.Context, info Info, apiKey, baseURL, thinkingLevel strin
 		return NewOpenCode(ctx, info.Model, apiKey, baseURL, thinkingLevel, opts)
 	case "agentgateway":
 		return NewAgentGateway(ctx, info.Model, apiKey, baseURL, opts)
+	case "fm":
+		return NewFoundationModels(ctx, info.Model, apiKey, baseURL, opts)
 	default:
 		return nil, fmt.Errorf("unsupported provider: %s", info.Provider)
 	}

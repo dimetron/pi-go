@@ -33,6 +33,15 @@ type setupProviderEntry struct {
 	// optionalKey asks for a key but accepts a blank answer; see
 	// tui.SetupProvider.OptionalKey.
 	optionalKey bool
+	// modelPrefix is prepended to the chosen model when no catalog supplies
+	// fully-qualified names for this provider.
+	//
+	// fm needs it: its IDs are the bare words "system" and "pcc", which no
+	// resolver accepts without their prefix, and the wizard stores whatever the
+	// candidate list shows. Without this, `pi setup` would write a default role
+	// of "system" that fails on the next run — the wizard would look like it
+	// worked and the very next command would reject the model.
+	modelPrefix string
 }
 
 var setupProviders = []setupProviderEntry{
@@ -107,6 +116,16 @@ var setupProviders = []setupProviderEntry{
 		envVar:   "AZUREOPENAI_API_KEY",
 		needsKey: true,
 		keyURL:   "https://portal.azure.com",
+	},
+	{
+		name:  "fm",
+		label: "Apple Foundation Models (on-device)",
+		// No key variable at all: fm listens on loopback and authenticates
+		// nothing. envVar stays empty so writesKey never tries to save one.
+		needsKey: false,
+		// 8192-token window, smaller than a coding-agent prompt — the label
+		// says on-device rather than implying it can drive the main role.
+		modelPrefix: "fm/",
 	},
 }
 
@@ -225,10 +244,24 @@ func saveSetupResult(entry setupProviderEntry, result tui.SetupResult) error {
 		}
 	}
 
-	if err := config.SaveDefaultRole(result.Model, entry.name); err != nil {
+	if err := config.SaveDefaultRole(entry.qualifiedModel(result.Model), entry.name); err != nil {
 		return fmt.Errorf("saving default model: %w", err)
 	}
 	return nil
+}
+
+// qualifiedModel applies the provider's prefix to a chosen model.
+//
+// Only the wizard's own free-text and catalog candidates come through here, so
+// a model that already carries the prefix is left alone rather than doubled.
+func (e setupProviderEntry) qualifiedModel(model string) string {
+	if e.modelPrefix == "" || model == "" {
+		return model
+	}
+	if strings.HasPrefix(strings.ToLower(model), e.modelPrefix) {
+		return model
+	}
+	return e.modelPrefix + model
 }
 
 // writesKey reports whether saving this result stores a key. A blank optional
@@ -290,6 +323,13 @@ func setupModelCandidates() map[string][]string {
 			continue
 		}
 		out[p.name] = setupRankModels(p.name, ids)
+	}
+	// fm has no embedded pricing catalog — it is on-device and free — so its two
+	// model IDs would otherwise never appear as candidates and the user would
+	// have to type "system" exactly. Sourced from the provider package so the
+	// wizard can only ever offer names ValidateModel accepts.
+	if ids := provider.FoundationModelIDs(); len(ids) > 0 {
+		out["fm"] = ids
 	}
 	return out
 }
