@@ -87,6 +87,8 @@ func defaultAPIBaseURL(providerName string) string {
 		return "https://api.x.ai"
 	case "agentgateway":
 		return "http://localhost:4000"
+	case "fm":
+		return provider.FoundationModelBaseURL("")
 	default:
 		return ""
 	}
@@ -105,6 +107,8 @@ func pingEndpoint(providerName string) string {
 		return "/v1/models"
 	case "agentgateway":
 		return "/v1/models"
+	case "fm":
+		return "/health"
 	default:
 		return "/"
 	}

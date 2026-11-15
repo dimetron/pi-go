@@ -1180,6 +1180,12 @@ func switchedModelName(info provider.Info) string {
 	if info.Provider == "agentgateway" {
 		return "agentgateway/" + info.Model
 	}
+	// fm/ too: "system" and "pcc" carry no provider hint on their own, so
+	// returning the bare name would re-resolve to "unknown model" on the next
+	// switch — or, worse, to whatever else claimed the word.
+	if info.Provider == "fm" {
+		return "fm/" + info.Model
+	}
 	return info.Model
 }
 

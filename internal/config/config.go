@@ -365,6 +365,12 @@ func autoDetectProvider(modelName string) string {
 	if strings.HasPrefix(lower, "agentgateway/") {
 		return "agentgateway"
 	}
+	// fm/ prefix → Apple Foundation Models, served by a local `fm serve`. The
+	// prefix is mandatory: "system" and "pcc" are ordinary words, so inferring
+	// this provider from a bare name would route unrelated models to loopback.
+	if strings.HasPrefix(lower, "fm/") {
+		return "fm"
+	}
 	// :cloud suffix → native Ollama provider.
 	if strings.HasSuffix(modelName, ":cloud") || strings.HasSuffix(modelName, "-cloud") {
 		return "ollama"
@@ -736,6 +742,9 @@ func APIKeys() map[string]string {
 		"ollama":       {"OLLAMA_API_KEY"},
 		"opencode":     {"OPENCODE_API_KEY"},
 		"agentgateway": {"AGENTGATEWAY_API_KEY"},
+		// fm is Apple's Foundation Models server on loopback and has no
+		// credential to configure; listing it here with a variable nobody sets
+		// would make APIKeys() report a key it can never see.
 	}
 	for provider, vars := range envVars {
 		for _, envVar := range vars {
@@ -763,6 +772,7 @@ func BaseURLs() map[string]string {
 		"ollama":       "OLLAMA_HOST",
 		"opencode":     "OPENCODE_BASE_URL",
 		"agentgateway": "AGENTGATEWAY_BASE_URL",
+		"fm":           "FM_BASE_URL",
 	}
 	for provider, envVar := range envVars {
 		if val := os.Getenv(envVar); val != "" {
