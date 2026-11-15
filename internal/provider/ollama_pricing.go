@@ -53,6 +53,23 @@ func parseOllamaCloudPricing() ollamaCloudPricing {
 	return p
 }
 
+// IsOllamaCloudCatalogModel reports whether a bare model name is served by
+// api.ollama.com's catalog.
+//
+// This is membership, not pricing, and it is exact on purpose: the snapshot is
+// the same list of base names the cloud API accepts, and isOllamaCloudModel
+// only recognizes the tagged forms (:cloud, -cloud). A name that is in neither
+// is a local daemon model, which is the answer kagent's own routing rule
+// (models.OllamaReachesCloud) gives for the same input.
+//
+// Longest-prefix matching is deliberately not used here — it belongs to
+// pricing, where deepseek-v4-flash:0731 has to resolve against its base entry.
+// For routing, a dated suffix is a different model name, not the base model.
+func IsOllamaCloudCatalogModel(modelName string) bool {
+	_, ok := ollamaCloudPricingParsed.Models[strings.ToLower(strings.TrimSpace(modelName))]
+	return ok
+}
+
 // OllamaCloudCost returns the per-million-token USD rates for an Ollama Cloud
 // model, using the same base-name matching as the rest of the pricing lookup.
 // ok is false when the model is not in the snapshot.

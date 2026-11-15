@@ -1063,7 +1063,7 @@ func TestSelectModelListProviders(t *testing.T) {
 		{
 			name:    "--url opts every provider in",
 			flagURL: "https://proxy.example",
-			want:    []string{"anthropic", "openai", "gemini", "mistral", "xai", "ollama", "openrouter", "agentgateway"},
+			want:    []string{"anthropic", "openai", "gemini", "mistral", "xai", "ollama", "openrouter", "agentgateway", "fm"},
 		},
 		{
 			name: "a configured azure prints alongside the queried providers",

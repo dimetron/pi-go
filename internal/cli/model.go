@@ -71,7 +71,7 @@ Examples:
 }
 
 // allProviders is the fixed list of providers supporting model listing.
-var allProviders = []string{"anthropic", "openai", "gemini", "mistral", "xai", "ollama", "openrouter", "agentgateway"}
+var allProviders = []string{"anthropic", "openai", "gemini", "mistral", "xai", "ollama", "openrouter", "agentgateway", "fm"}
 
 // flagModelListOutput is the --output flag value for `pi model list`.
 var flagModelListOutput string
@@ -192,7 +192,7 @@ func selectModelListProviders(out io.Writer, args []string, keys, baseURLs map[s
 	if len(args) == 1 {
 		p := strings.ToLower(args[0])
 		switch p {
-		case "anthropic", "openai", "gemini", "mistral", "xai", "ollama", "openrouter", "agentgateway":
+		case "anthropic", "openai", "gemini", "mistral", "xai", "ollama", "openrouter", "agentgateway", "fm":
 			return []string{p}, nil
 		case "azure":
 			// Not a live query: enumerating deployments needs ARM credentials
@@ -203,7 +203,7 @@ func selectModelListProviders(out io.Writer, args []string, keys, baseURLs map[s
 			printAzureDeployments(out)
 			return nil, nil
 		default:
-			return nil, fmt.Errorf("unknown provider %q; valid: anthropic, openai, azure, gemini, mistral, xai, ollama, openrouter, agentgateway", args[0])
+			return nil, fmt.Errorf("unknown provider %q; valid: anthropic, openai, azure, gemini, mistral, xai, ollama, openrouter, agentgateway, fm", args[0])
 		}
 	}
 
@@ -245,6 +245,9 @@ func modelListBaseURL(providerName string, baseURLs map[string]string) string {
 	}
 	if baseURL == "" && providerName == "agentgateway" {
 		baseURL = "http://localhost:4000"
+	}
+	if baseURL == "" && providerName == "fm" {
+		baseURL = provider.FoundationModelBaseURL("")
 	}
 	return baseURL
 }

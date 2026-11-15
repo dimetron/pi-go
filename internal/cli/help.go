@@ -100,6 +100,13 @@ func credentialStatus(prov, model string, keys map[string]string) string {
 		return "none (local gateway)"
 	}
 
+	// fm is Apple's on-device Foundation Models server on loopback. It has no
+	// credential at all, so reporting a missing key would be a false alarm — the
+	// request never leaves the machine.
+	if prov == "fm" {
+		return "none (on-device)"
+	}
+
 	envVar := providerEnvVar(prov)
 	if _, ok := keys[prov]; ok {
 		return envVar + " (set)"

@@ -97,6 +97,8 @@ func providerDefaultBaseURL(p string) string {
 		return "https://openrouter.ai/api/v1"
 	case "agentgateway":
 		return "http://localhost:4000"
+	case "fm":
+		return fmDefaultBaseURL
 	default:
 		return ""
 	}
@@ -121,6 +123,8 @@ func ListModels(ctx context.Context, providerName string, opts ListModelsOptions
 		return listOpenRouterModels(ctx, opts)
 	case "agentgateway":
 		return listAgentGatewayModels(ctx, opts)
+	case "fm":
+		return listFoundationModels(ctx, opts)
 	case "ollama":
 		// OllamaListModels already fills context window and capabilities
 		// from the daemon's /api/tags response — nothing to enrich.
@@ -448,4 +452,49 @@ func fetchJSON(ctx context.Context, method, url string, opts ListModelsOptions, 
 		return fmt.Errorf("decoding response: %w", err)
 	}
 	return nil
+}
+
+// listFoundationModels enumerates the models `fm serve` advertises.
+//
+// It is a live query, not a snapshot: the set is fixed at two, but which of them
+// is available is not — "pcc" reports itself unavailable unless fm was started
+// from the Terminal app, and the listing carries that in an "available" flag and
+// a "reason" the generic OpenAI payload shape drops.
+//
+// A server that is not running is reported as an error rather than started.
+// Listing models is a question about what exists, and launching a server to
+// answer it would make `pi model list` a side-effecting command.
+func listFoundationModels(ctx context.Context, opts ListModelsOptions) ([]ModelInfo, error) {
+	baseURL := opts.BaseURL
+	if baseURL == "" {
+		baseURL = fmDefaultBaseURL
+	}
+	trimmed := strings.TrimRight(baseURL, "/")
+	endpoint := trimmed + "/v1/models"
+	if strings.HasSuffix(trimmed, "/v1") {
+		endpoint = trimmed + "/models"
+	}
+
+	var payload struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := fetchJSON(ctx, http.MethodGet, endpoint, opts, "fm", &payload); err != nil {
+		return nil, fmt.Errorf("listing Foundation Models models (is `fm serve` running?): %w", err)
+	}
+
+	models := make([]ModelInfo, 0, len(payload.Data))
+	for _, m := range payload.Data {
+		models = append(models, ModelInfo{
+			ID:        m.ID,
+			OwnedBy:   "Apple",
+			MaxTokens: fmMaxOutputTokens,
+			// From the embedded catalog, not the wire: fm's /v1/models omits the
+			// window, and a 0 here would read as "unknown" and disable
+			// auto-compaction for a model whose limit is a known 8192.
+			ContextWindow: ContextWindowSizeFor("fm", m.ID),
+		})
+	}
+	return models, nil
 }

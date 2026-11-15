@@ -214,5 +214,9 @@
     "nemotron-3-super:cloud": 262144,
     "nemotron-3-ultra": 262144,
     "nemotron-3-ultra:cloud": 262144
+  },
+  "fm": {
+    "system": 8192,
+    "pcc": 8192
   }
 }

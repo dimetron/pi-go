@@ -81,8 +81,12 @@ func TestSandbox_Resolve_RelativePath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if rel != "subdir/file.txt" {
-		t.Errorf("Resolve(relative) = %q, want %q", rel, "subdir/file.txt")
+	// Resolve returns an OS path, which is filepath.Separator-separated: on
+	// Windows filepath.Clean turns "subdir/file.txt" into `subdir\file.txt`.
+	// Comparing against the slash spelling asserted that Resolve echoed its
+	// input verbatim rather than that it resolved it, and failed on Windows.
+	if want := filepath.Join("subdir", "file.txt"); rel != want {
+		t.Errorf("Resolve(relative) = %q, want %q", rel, want)
 	}
 }
 

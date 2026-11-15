@@ -141,8 +141,44 @@ if you switch the harness to `spec.byo`.
 
 ## Model configuration
 
-Set `PI_MODEL` and `PI_BASE_URL` in the Harness `spec.env` to point at the
-provider. The template's `modelConfig` names a kagent `ModelConfig`; on the
-local cluster that is `default-model-config` (Ollama at
-`http://host.docker.internal:11434` from the worker nodes). Keep credentials in
-kagent Secrets, never in the image or manifest.
+The harness follows the model of the AgentTemplate's `modelConfig`. The kagent
+compiler writes it to `KAGENT_CONFIG_JSON` (`agent.model`) and `pi a2a` reads it at
+startup. Precedence, highest first:
+
+1. `--model` / `--url` flags
+2. `PI_MODEL` / `PI_BASE_URL` in the Harness `spec.env` (explicit operator override)
+3. the ModelConfig's model from `KAGENT_CONFIG_JSON`
+4. the built-in default (`glm-5.2:cloud`)
+
+The base URL follows the model: `PI_BASE_URL` / `--url` apply to whichever model wins,
+and the ModelConfig's own endpoint is used only when the model came from the ModelConfig.
+The winning source, model and base URL are written to `~/.pi-go/sessions/a2a-server.err.log`
+(never headers or keys).
+
+| ModelConfig provider | pi-go model | base URL |
+|---|---|---|
+| `ollama`, empty host or ollama.com, model is a catalog entry or carries `:cloud`/`-cloud` | `ollama/<model>` | `https://api.ollama.com` (named explicitly, so the key does not decide the route); the key is `OLLAMA_API_KEY` |
+| `ollama`, empty host, any other model (e.g. `qwen3:8b`, `llama3.3`) | `ollama/<model>` | none — the local daemon, which is where kagent routes the same model |
+| `ollama`, other host | `ollama/<model>` | the host (`ollama.host` in the config, else `OLLAMA_API_BASE`, which kagent sets) |
+| `openai` | `openai/<model>` | `base_url` if set |
+| `anthropic` | `anthropic/<model>` | `base_url` if set |
+| `mistral` | `mistral/<model>` | `base_url` if set |
+| `gemini` | `<model>` | `base_url` if set |
+
+The Ollama row follows kagent's own rule (`models.OllamaReachesCloud`): a host that is
+not ollama.com means a daemon, and otherwise the model name decides. An empty host does
+not mean cloud — kagent leaves `OLLAMA_API_BASE` unset exactly so the model name chooses.
+
+A model that pi-go cannot resolve, or that resolves to a provider but is absent from
+pi-go's embedded catalog, is not applied: the warning names it and the default is used.
+That matters because kagent's model catalog and pi-go's snapshots drift apart, and a
+model only kagent knows would otherwise fail every turn instead of falling back.
+
+Other providers (Azure OpenAI, Vertex AI, Bedrock, SAP AI Core, Foundry) have no pi-go
+routing from the compiled config: a warning is logged and the default is used. A
+missing, malformed or model-less `KAGENT_CONFIG_JSON` keeps the previous behaviour.
+ModelConfig headers, TLS settings and provider options are not applied.
+
+Before this, the harness ignored the ModelConfig and always ran the default, whatever
+kagent reported. Set `PI_MODEL` only to override the ModelConfig on purpose. Keep
+credentials in kagent Secrets, never in the image or manifest.

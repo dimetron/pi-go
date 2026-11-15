@@ -238,16 +238,20 @@ func TestSetupRankModelsPutsNewestFirst(t *testing.T) {
 func TestSetupProviderTableIsWellFormed(t *testing.T) {
 	seen := map[string]bool{}
 	for _, p := range setupProviders {
-		if p.name == "" || p.label == "" || p.envVar == "" {
+		if p.name == "" || p.label == "" {
 			t.Errorf("incomplete entry: %+v", p)
+		}
+		// A provider that needs a key must name the variable and the page to get
+		// one from. A provider with no credential at all — fm, on loopback —
+		// names neither, and inventing an unused variable for it would show the
+		// user a setting that nothing reads.
+		if p.needsKey && (p.envVar == "" || p.keyURL == "") {
+			t.Errorf("provider %q needs a key but is missing envVar or keyURL: %+v", p.name, p)
 		}
 		if seen[p.name] {
 			t.Errorf("duplicate provider %q", p.name)
 		}
 		seen[p.name] = true
-		if p.needsKey && p.keyURL == "" {
-			t.Errorf("provider %q needs a key but has no keyURL to show the user", p.name)
-		}
 	}
 }
 
@@ -367,5 +371,64 @@ func TestSaveSetupResultOptionalGatewayKey(t *testing.T) {
 	after, _ := os.ReadFile(envPath)
 	if !strings.Contains(string(after), "gw-secret") {
 		t.Errorf("a blank re-run erased the existing gateway key:\n%s", after)
+	}
+}
+
+// TestSaveSetupResultQualifiesFoundationModel proves the wizard cannot save a
+// default role that the resolver rejects.
+//
+// The wizard stores whatever its candidate list shows, and fm's IDs are the bare
+// words "system" and "pcc". ResolveWithBaseURL runs before the recorded provider
+// is applied, so a saved role of "system" fails on the next run: setup would
+// report success and the very next command would call the model unknown. The
+// prefix has to be applied on the way out.
+func TestSaveSetupResultQualifiesFoundationModel(t *testing.T) {
+	testenv.SetHome(t, t.TempDir())
+	t.Chdir(t.TempDir())
+
+	entry, ok := lookupSetupProvider("fm")
+	if !ok {
+		t.Fatal("fm is not in setupProviders; the wizard cannot configure it")
+	}
+
+	if err := saveSetupResult(entry, tui.SetupResult{Provider: "fm", Model: "system"}); err != nil {
+		t.Fatalf("saveSetupResult: %v", err)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("config.Load after setup: %v", err)
+	}
+	model, prov, _, _, _, err := cfg.ResolveRole("default")
+	if err != nil {
+		t.Fatalf("ResolveRole(default): %v", err)
+	}
+	if model != "fm/system" {
+		t.Errorf("resolved model = %q, want fm/system", model)
+	}
+	if prov != "fm" {
+		t.Errorf("resolved provider = %q, want fm", prov)
+	}
+
+	// The name the role stores must actually resolve, which is the property the
+	// bare "system" failed.
+	if _, err := provider.Resolve(model); err != nil {
+		t.Errorf("Resolve(%q) from the saved role: %v", model, err)
+	}
+}
+
+// TestQualifiedModelDoesNotDoublePrefix proves an already-qualified name passes
+// through, so re-running setup on a configured machine does not produce
+// "fm/fm/system".
+func TestQualifiedModelDoesNotDoublePrefix(t *testing.T) {
+	entry, ok := lookupSetupProvider("fm")
+	if !ok {
+		t.Fatal("fm is not in setupProviders")
+	}
+	for _, in := range []string{"fm/system", "FM/pcc", "system"} {
+		got := entry.qualifiedModel(in)
+		if strings.HasPrefix(got, "fm/fm/") {
+			t.Errorf("qualifiedModel(%q) = %q, doubled the prefix", in, got)
+		}
 	}
 }
