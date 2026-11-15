@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"iter"
 	"log/slog"
@@ -1150,6 +1151,14 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 		os.Remove(tmpName)
 		return fmt.Errorf("chmod temp file: %w", err)
 	}
+	// Sync before the rename. Renaming an unsynced file publishes a name whose
+	// contents may still be in the page cache, so a crash can leave the target
+	// present but empty or truncated — the rename survives, the data does not.
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return fmt.Errorf("syncing temp file: %w", err)
+	}
 	if err := tmp.Close(); err != nil {
 		os.Remove(tmpName)
 		return fmt.Errorf("closing temp file: %w", err)
@@ -1211,6 +1220,18 @@ func readMeta(sessionDir string) (*Meta, error) {
 	return &meta, nil
 }
 
+// appendEventToFile appends one event as a JSONL line and flushes it to disk.
+//
+// The Sync is what makes a completed append durable: without it the line lives
+// only in the page cache, so a crash or power loss after the turn was reported
+// to the user can still drop it.
+//
+// The tail repair before the write is not defensive padding. If a previous
+// append was cut short by a crash, the file ends in a partial JSON line with no
+// trailing newline, and an O_APPEND write would concatenate this event onto it
+// — corrupting both. leftJoin below ends that torn tail with EOF, which leaves
+// its fragment on its own line, so readEvents can skip it as unparseable and
+// this event stays intact.
 func appendEventToFile(sessionDir string, event *session.Event) error {
 	data, err := json.Marshal(event)
 	if err != nil {
@@ -1218,18 +1239,72 @@ func appendEventToFile(sessionDir string, event *session.Event) error {
 	}
 	data = append(data, '\n')
 
-	f, err := os.OpenFile(filepath.Join(sessionDir, "events.jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	path := filepath.Join(sessionDir, "events.jsonl")
+	// O_RDWR, not O_WRONLY: writes still land at EOF because of O_APPEND, but
+	// reads are needed to inspect the last byte before appending (leftJoin).
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
 		return fmt.Errorf("opening events file: %w", err)
 	}
 	defer f.Close()
 
-	_, err = f.Write(data)
-	return err
+	joined, err := leftJoin(data, f)
+	if err != nil {
+		return fmt.Errorf("separating torn tail: %w", err)
+	}
+
+	if _, err := f.Write(joined); err != nil {
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("syncing events file: %w", err)
+	}
+	return nil
 }
 
+// leftJoin prefixes data with a newline when f is non-empty and does not
+// already end in one, so data starts a fresh line.
+//
+// f is opened O_APPEND: writes always go to the end, but reads see the whole
+// file, which is what lets the previous byte be inspected before writing.
+func leftJoin(data []byte, f *os.File) ([]byte, error) {
+	info, err := f.Stat()
+	if err != nil {
+		return data, err
+	}
+	if info.Size() == 0 {
+		return data, nil
+	}
+
+	// Size is positive, so this read returns a byte.
+	buf := make([]byte, 1)
+	if _, err := f.ReadAt(buf, info.Size()-1); err != nil {
+		return data, err
+	}
+	if buf[0] == '\n' {
+		return data, nil
+	}
+
+	joined := make([]byte, 0, len(data)+1)
+	joined = append(joined, '\n')
+	return append(joined, data...), nil
+}
+
+// readEvents parses events.jsonl, tolerating a torn final line.
+//
+// A crash during append can leave the last line partial. Failing the whole load
+// on it loses the entire session — including every event before the torn one —
+// when the only unrecoverable part is that one record. A line that is not
+// syntactically valid JSON is therefore skipped and logged, and the rest of the
+// file still loads.
+//
+// Only syntax errors are skipped. A line that parses but does not fit
+// session.Event (wrong field type, undecodable timestamp) means the data
+// disagrees with the schema, which is a real fault and must surface rather than
+// silently shorten the transcript.
 func readEvents(sessionDir string) ([]*session.Event, error) {
-	data, err := os.ReadFile(filepath.Join(sessionDir, "events.jsonl"))
+	path := filepath.Join(sessionDir, "events.jsonl")
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -1242,12 +1317,20 @@ func readEvents(sessionDir string) ([]*session.Event, error) {
 	}
 
 	var events []*session.Event
-	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+	for i, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
 		if line == "" {
 			continue
 		}
 		var event session.Event
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			var syntaxErr *json.SyntaxError
+			if errors.As(err, &syntaxErr) {
+				slog.Warn("session: skipping malformed event line",
+					"session", filepath.Base(sessionDir),
+					"line", i+1,
+					"error", err)
+				continue
+			}
 			return nil, fmt.Errorf("unmarshaling event: %w", err)
 		}
 		events = append(events, &event)
@@ -1468,6 +1551,15 @@ func rewriteEvents(sessionDir string, events []*session.Event) error {
 			os.Remove(tmpFile)
 			return fmt.Errorf("encoding event: %w", err)
 		}
+	}
+
+	// Sync before the rename. A rewrite replaces the entire history, so if the
+	// rename survives a crash while the contents are still only in the page
+	// cache, the session is lost outright rather than shortened.
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmpFile)
+		return fmt.Errorf("syncing temp events file: %w", err)
 	}
 
 	if err := f.Close(); err != nil {
