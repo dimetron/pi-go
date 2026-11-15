@@ -2,16 +2,18 @@ package tools
 
 import (
 	"io/fs"
+	"path/filepath"
 	"testing"
 )
 
-// Resolve must return an fs.ValidPath, not the caller's spelling.
+// Resolve must return a path a walking consumer can use.
 //
-// find and grep pass Resolve's result straight to fs.WalkDir on the Root's FS,
-// which requires fs.ValidPath. A "./sub" the caller wrote is a valid request but
-// an invalid fs.FS path, and fs rejects it with "invalid argument". Both walk
-// sites discard the walk error, so before Resolve cleaned its result these
-// searches returned zero results and a nil error — silently wrong, not failing.
+// Resolve hands back an OS path; find and grep convert it with filepath.ToSlash
+// before handing it to fs.WalkDir, which requires fs.ValidPath. This asserts
+// that conversion produces a path fs accepts, for every spelling of the same
+// request. Testing the raw return instead would fail on Windows, where
+// filepath.Clean rewrites "sub/a.go" to `sub\a.go` and fs would reject it — a
+// Windows-only failure that only CI catches.
 func TestSandbox_Resolve_ReturnsValidFSPath(t *testing.T) {
 	sb := testSandbox(t, t.TempDir())
 	if err := sb.WriteFile("sub/a.go", []byte("package a\n"), 0o644); err != nil {
@@ -23,11 +25,13 @@ func TestSandbox_Resolve_ReturnsValidFSPath(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Resolve(%q): %v", in, err)
 		}
-		if !fs.ValidPath(got) {
-			t.Errorf("Resolve(%q) = %q, which is not an fs.ValidPath; find/grep cannot walk it", in, got)
+		// The same conversion find and grep apply before walking.
+		asFS := filepath.ToSlash(got)
+		if !fs.ValidPath(asFS) {
+			t.Errorf("Resolve(%q) = %q, ToSlash = %q which is not an fs.ValidPath; find/grep cannot walk it", in, got, asFS)
 		}
-		if _, statErr := fs.Stat(sb.FS(), got); statErr != nil {
-			t.Errorf("fs.Stat(FS(), %q) = %v; Resolve(%q) produced a path fs cannot use", got, statErr, in)
+		if _, statErr := fs.Stat(sb.FS(), asFS); statErr != nil {
+			t.Errorf("fs.Stat(FS(), %q) = %v; Resolve(%q) produced a path fs cannot use", asFS, statErr, in)
 		}
 	}
 }
