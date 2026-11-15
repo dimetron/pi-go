@@ -157,12 +157,22 @@ The winning source, model and base URL are written to `~/.pi-go/sessions/a2a-ser
 
 | ModelConfig provider | pi-go model | base URL |
 |---|---|---|
-| `ollama`, empty host or ollama.com | `<model>:cloud` (unchanged if already `:cloud`/`-cloud`; a tagged model such as `qwen3:8b` becomes `ollama/qwen3:8b` on `https://api.ollama.com`) | none; the key is `OLLAMA_API_KEY` as for any cloud model |
+| `ollama`, empty host or ollama.com, model is a catalog entry or carries `:cloud`/`-cloud` | `ollama/<model>` | `https://api.ollama.com` (named explicitly, so the key does not decide the route); the key is `OLLAMA_API_KEY` |
+| `ollama`, empty host, any other model (e.g. `qwen3:8b`, `llama3.3`) | `ollama/<model>` | none — the local daemon, which is where kagent routes the same model |
 | `ollama`, other host | `ollama/<model>` | the host (`ollama.host` in the config, else `OLLAMA_API_BASE`, which kagent sets) |
 | `openai` | `openai/<model>` | `base_url` if set |
 | `anthropic` | `anthropic/<model>` | `base_url` if set |
 | `mistral` | `mistral/<model>` | `base_url` if set |
-| `gemini` | `<model>` | none |
+| `gemini` | `<model>` | `base_url` if set |
+
+The Ollama row follows kagent's own rule (`models.OllamaReachesCloud`): a host that is
+not ollama.com means a daemon, and otherwise the model name decides. An empty host does
+not mean cloud — kagent leaves `OLLAMA_API_BASE` unset exactly so the model name chooses.
+
+A model that pi-go cannot resolve, or that resolves to a provider but is absent from
+pi-go's embedded catalog, is not applied: the warning names it and the default is used.
+That matters because kagent's model catalog and pi-go's snapshots drift apart, and a
+model only kagent knows would otherwise fail every turn instead of falling back.
 
 Other providers (Azure OpenAI, Vertex AI, Bedrock, SAP AI Core, Foundry) have no pi-go
 routing from the compiled config: a warning is logged and the default is used. A

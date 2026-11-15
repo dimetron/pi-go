@@ -33,7 +33,12 @@ type kagentModelSpec struct {
 	Mistral *struct {
 		BaseURL string `json:"base_url"`
 	} `json:"mistral"`
-	Gemini *json.RawMessage `json:"gemini"`
+	// Gemini compiles a base_url too (ADKGemini.base_url), so a ModelConfig
+	// pointing at a proxy keeps its endpoint — and resolving it as custom also
+	// skips catalog validation, which a proxied deployment needs.
+	Gemini *struct {
+		BaseURL string `json:"base_url"`
+	} `json:"gemini"`
 	Ollama *struct {
 		Host string `json:"host"`
 	} `json:"ollama"`
@@ -98,31 +103,47 @@ func KagentModelFromEnv(getenv func(string) string) (m KagentModel, ok bool, rea
 	case spec.Mistral != nil:
 		m = KagentModel{Model: withPrefix("mistral/", name), BaseURL: strings.TrimSpace(spec.Mistral.BaseURL)}
 	case spec.Gemini != nil:
-		m = KagentModel{Model: name}
+		m = KagentModel{Model: name, BaseURL: strings.TrimSpace(spec.Gemini.BaseURL)}
 	default:
 		return KagentModel{}, false, fmt.Sprintf("provider of model %q is not supported by pi-go", name)
 	}
-	if _, err := provider.ResolveWithBaseURL(m.Model, m.BaseURL); err != nil {
+	info, err := provider.ResolveWithBaseURL(m.Model, m.BaseURL)
+	if err != nil {
 		return KagentModel{}, false, fmt.Sprintf("model %q does not resolve: %v", name, err)
+	}
+	// ResolveWithBaseURL only picks a provider. The session build runs
+	// ValidateModel as well (runtime.go:resolveSessionProvider), and that
+	// rejects a model pi-go's catalog does not know — which would fail every
+	// turn rather than fall back to the default. kagent's own model catalog
+	// drifts from pi-go's embedded snapshots, so a ModelConfig naming a model
+	// only kagent knows is a normal case, not a broken template.
+	if err := provider.ValidateModel(info); err != nil {
+		return KagentModel{}, false, fmt.Sprintf("model %q is not in pi-go's catalog: %v", name, err)
 	}
 	return m, true, ""
 }
 
-// ollamaKagentModel maps an Ollama ModelConfig. An empty host or an ollama.com
-// host means Ollama Cloud (the key arrives as OLLAMA_API_KEY, as for any
-// cloud-tagged model); any other host is an explicit daemon.
+// ollamaKagentModel maps an Ollama ModelConfig onto the same routing kagent
+// itself applies (models.OllamaReachesCloud): an explicit host that is not
+// ollama.com is a daemon; otherwise the model name decides, being either a
+// catalog name api.ollama.com serves or one carrying the :cloud/-cloud tag.
+//
+// An empty host does not mean cloud. kagent leaves OLLAMA_API_BASE unset when
+// the operator named no host, and the runtime it substitutes applies the
+// model-name rule to that absence — so treating an empty host as cloud sends
+// local models (qwen3:8b, llama3.3) to api.ollama.com, where they do not exist.
 func ollamaKagentModel(name, host string) KagentModel {
 	if host != "" && !provider.IsOllamaCloudEndpoint(host) {
 		return KagentModel{Model: withPrefix("ollama/", name), BaseURL: host}
 	}
-	if provider.IsOllamaCloudModel(name) {
-		return KagentModel{Model: name}
+	if provider.IsOllamaCloudModel(name) || provider.IsOllamaCloudCatalogModel(name) {
+		// The cloud API accepts the base catalog name; a :cloud tag is the
+		// local daemon's proxy form, not something to add. Name the endpoint so
+		// the key is not what decides the destination.
+		return KagentModel{Model: withPrefix("ollama/", name), BaseURL: kagentOllamaCloudURL}
 	}
-	if !strings.Contains(name, ":") {
-		return KagentModel{Model: name + ":cloud"}
-	}
-	// A tagged model (qwen3:8b) cannot also carry ":cloud": name the endpoint.
-	return KagentModel{Model: withPrefix("ollama/", name), BaseURL: kagentOllamaCloudURL}
+	// Neither a cloud name nor a host: the daemon, as kagent routes it.
+	return KagentModel{Model: withPrefix("ollama/", name)}
 }
 
 func withPrefix(prefix, name string) string {

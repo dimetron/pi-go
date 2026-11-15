@@ -195,7 +195,12 @@ func TestResolveA2AModelPrecedence(t *testing.T) {
 		wantURL   string
 	}{
 		{name: "default", wantModel: "glm-5.2:cloud"},
-		{name: "kagent config", env: map[string]string{"KAGENT_CONFIG_JSON": kagentCfg}, wantModel: "deepseek-v4.1-flash:cloud"},
+		{
+			name:      "kagent config",
+			env:       map[string]string{"KAGENT_CONFIG_JSON": kagentCfg},
+			wantModel: "ollama/deepseek-v4.1-flash",
+			wantURL:   "https://api.ollama.com",
+		},
 		{
 			name:      "PI_MODEL beats kagent config",
 			env:       map[string]string{"KAGENT_CONFIG_JSON": kagentCfg, "PI_MODEL": "glm-5.2:cloud"},
@@ -259,7 +264,7 @@ func TestResolveA2AModelLogsSourceNotSecrets(t *testing.T) {
 	env := map[string]string{"KAGENT_CONFIG_JSON": `{"agent":{"model":{"model":"deepseek-v4.1-flash","headers":{"Authorization":"s3cret"},"ollama":{}}}}`}
 	resolveA2AModel("", "", func(k string) string { return env[k] }, logger)
 	out := buf.String()
-	if !strings.Contains(out, "deepseek-v4.1-flash:cloud") || !strings.Contains(out, "kagent ModelConfig") {
+	if !strings.Contains(out, "ollama/deepseek-v4.1-flash") || !strings.Contains(out, "kagent ModelConfig") {
 		t.Errorf("log lacks model/source: %q", out)
 	}
 	if strings.Contains(out, "s3cret") {
