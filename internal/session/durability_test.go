@@ -210,3 +210,49 @@ func TestWriteFileAtomic_ContentIsComplete(t *testing.T) {
 		t.Errorf("read back %q, want %q", got, data)
 	}
 }
+
+// Error paths: a session directory that cannot be opened must report the
+// failure rather than being mistaken for a successful write.
+func TestAppendEventToFile_ErrorWhenSessionDirMissing(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "does", "not", "exist")
+	event := &session.Event{ID: "e1", Timestamp: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)}
+
+	err := appendEventToFile(missing, event)
+	if err == nil {
+		t.Fatal("appendEventToFile() = nil, want an error for a missing session directory")
+	}
+	if !strings.Contains(err.Error(), "opening events file") {
+		t.Errorf("error = %v, want it to name the open failure", err)
+	}
+}
+
+func TestRewriteEvents_ErrorWhenSessionDirMissing(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "does", "not", "exist")
+	if err := rewriteEvents(missing, nil); err == nil {
+		t.Fatal("rewriteEvents() = nil, want an error for a missing session directory")
+	}
+}
+
+func TestWriteFileAtomic_ErrorWhenDirMissing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "does", "not", "exist", "meta.json")
+	if err := writeFileAtomic(path, []byte("{}"), 0o644); err == nil {
+		t.Fatal("writeFileAtomic() = nil, want an error for a missing parent directory")
+	}
+}
+
+// leftJoin must surface a stat failure rather than returning a path it could
+// not inspect — a silent pass would let the next append corrupt a torn tail.
+func TestLeftJoin_ErrorOnClosedFile(t *testing.T) {
+	dir := t.TempDir()
+	f, err := os.Create(filepath.Join(dir, "f"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := leftJoin([]byte("data"), f); err == nil {
+		t.Fatal("leftJoin() = nil error on a closed file, want the stat failure")
+	}
+}
