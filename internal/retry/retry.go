@@ -89,6 +89,18 @@ var terminalPatterns = []string{
 	"invalid_request_error",
 	"not found",
 
+	// The request is structurally too large for the model. Nothing about waiting
+	// clears this: the same bytes produce the same rejection. It has to match
+	// before the status-code patterns, which is why it lives here — a context
+	// error routinely carries a 500, and the token counts in the message
+	// themselves ("19500 for the system prompt") contain the substring "500",
+	// so a transient match on the number would spend the whole backoff on a
+	// failure that cannot recover.
+	"context window",
+	"maximum allowed is",
+	"exceeded the model's context",
+	"maximum context length",
+
 	// The sandbox denying the dial. Retrying re-denies it.
 	"operation not permitted",
 }
