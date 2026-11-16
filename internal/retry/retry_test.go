@@ -75,6 +75,16 @@ func TestIsTransient(t *testing.T) {
 		{"400", errors.New(`POST "https://api.openai.com/v1/responses": 400 Bad Request {"message": "Invalid 'input[2].call_id': empty string."}`), false},
 		{"missing model", errors.New("404 Not Found: model 'deepseek-v4-flash:0731' not found"), false},
 		{"sandbox dial", errors.New(`Post "https://api.openai.com/v1/chat/completions": dial tcp 172.66.0.243:443: connect: operation not permitted`), false},
+
+		// Terminal: the request is too large for the model's window. Waiting
+		// cannot change the byte count, and the fm provider's own error carries
+		// the token breakdown — "19500 for the system prompt" — whose digits
+		// contain "500", which is a transient pattern. Without these entries a
+		// permanent overflow spent the entire five-retry backoff.
+		{"fm window refusal", errors.New("the request is roughly 30409 tokens, over the 8192-token context window of `fm serve` (19500 for the system prompt, 98 for the transcript, 10811 for tool declarations)"), false},
+		{"provider window rejection", errors.New("Provided 8,910 tokens, but the maximum allowed is 8,192."), false},                                         //nolint:revive // quoting the provider's body verbatim
+		{"gemini transcript overflow", errors.New("The session's transcript exceeded the model's context size."), false},                                     //nolint:revive // quoting the provider's body verbatim
+		{"openai max context", errors.New("This model's maximum context length is 128000 tokens. However, your messages resulted in 200000 tokens."), false}, //nolint:revive // quoting the provider's body verbatim
 	}
 
 	for _, tt := range tests {

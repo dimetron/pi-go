@@ -1,0 +1,1411 @@
+{
+ "tools": [
+  {
+   "description": "Read a file's contents. Returns the content with line numbers.\n\noffset is 1-based. Large files come back a window at a time; next_offset is the exact offset to pass to continue.",
+   "name": "read",
+   "parameters": {
+    "additionalProperties": true,
+    "properties": {
+     "file_path": {
+      "type": "string"
+     },
+     "limit": {
+      "type": "integer"
+     },
+     "offset": {
+      "type": "integer"
+     }
+    },
+    "required": [
+     "file_path"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "description": "Read an image and make it visible to the model (vision).\n\nUse this after a screenshot has been saved to disk, or to inspect a remote image by URL.\n\nRequired: file_path \u2014 either an absolute/sandbox-relative path to a local image, or an https:// URL to a remote image.\n\nURL fetching is gated by a conservative egress policy: only https, only public hosts. http://, loopback, private networks, link-local, and multicast destinations are all rejected.",
+   "name": "read_image",
+   "parameters": {
+    "additionalProperties": true,
+    "properties": {
+     "file_path": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "file_path"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "description": "Write content to a file. Creates parent directories if needed. Overwrites existing files.\n\nAn existing file must have been read in full first, so the content being replaced is known.",
+   "name": "write",
+   "parameters": {
+    "additionalProperties": true,
+    "properties": {
+     "content": {
+      "type": "string"
+     },
+     "file_path": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "file_path",
+     "content"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "description": "Edit a file by replacing an exact string match.\n\nold_string must be unique unless replace_all is true. Omitting new_string deletes old_string.",
+   "name": "edit",
+   "parameters": {
+    "additionalProperties": true,
+    "properties": {
+     "file_path": {
+      "type": "string"
+     },
+     "new_string": {
+      "type": "string"
+     },
+     "old_string": {
+      "type": "string"
+     },
+     "replace_all": {
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "file_path",
+     "old_string"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "description": "Execute a shell command and return its output. Commands run in a bash shell. Use for system operations, tests, builds, git, etc.\n\nA command that outlives its timeout (60s), or goes 90s with no output, is backgrounded rather than killed: the result carries running=true and a handle. Raise timeout for work you already know is long \u2014 a full test suite, an image build. Use bash_wait to read more output and bash_kill to stop it; a handle with no output at all means the command is too broad.\n\ntimeout, idle_timeout and wait_sec are in SECONDS, capped at 600. Write 300 for five minutes, not 300000.",
+   "name": "bash",
+   "parameters": {
+    "additionalProperties": true,
+    "properties": {
+     "command": {
+      "type": "string"
+     },
+     "idle_timeout": {
+      "type": "integer"
+     },
+     "timeout": {
+      "type": "integer"
+     }
+    },
+    "required": [
+     "command"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "description": "Search file contents using a regex pattern. Supports glob filtering and case-insensitive search. Returns matching lines with file paths and line numbers.",
+   "name": "ripgrep",
+   "parameters": {
+    "additionalProperties": true,
+    "properties": {
+     "case_insensitive": {
+      "type": "boolean"
+     },
+     "glob": {
+      "type": "string"
+     },
+     "path": {
+      "type": "string"
+     },
+     "pattern": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "pattern"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "description": "Find files matching a glob pattern. Searches recursively through directories. Supports patterns like '*.go', '**/*.ts', 'src/**/*.test.js'.",
+   "name": "find",
+   "parameters": {
+    "additionalProperties": true,
+    "properties": {
+     "path": {
+      "type": "string"
+     },
+     "pattern": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "pattern"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "description": "List the contents of a directory. Returns file names, types (file/directory), and sizes.",
+   "name": "ls",
+   "parameters": {
+    "additionalProperties": true,
+    "properties": {
+     "path": {
+      "type": "string"
+     }
+    },
+    "type": "object"
+   }
+  },
+  {
+   "description": "Show directory tree structure. Parameters: 'path' (directory to list, default '.') and 'depth' (max recursion depth, default 3, max 10). Returns an indented tree view of files and directories. Skips hidden and common non-code directories.",
+   "name": "tree",
+   "parameters": {
+    "additionalProperties": true,
+    "properties": {
+     "depth": {
+      "type": "integer"
+     },
+     "path": {
+      "type": "string"
+     }
+    },
+    "type": "object"
+   }
+  },
+  {
+   "description": "Get an overview of the current git repository: branch, recent commits, staged/unstaged/untracked files, and upstream status.",
+   "name": "git-overview",
+   "parameters": {
+    "additionalProperties": true,
+    "properties": {
+     "include_staged": {
+      "type": [
+       "null",
+       "boolean"
+      ]
+     },
+     "include_unstaged": {
+      "type": [
+       "null",
+       "boolean"
+      ]
+     },
+     "include_untracked": {
+      "type": [
+       "null",
+       "boolean"
+      ]
+     }
+    },
+    "type": "object"
+   }
+  },
+  {
+   "description": "Get the unified diff for a specific file.\n\nfile is relative to the repo root. Set staged for the cached diff.",
+   "name": "git-file-diff",
+   "parameters": {
+    "additionalProperties": true,
+    "properties": {
+     "file": {
+      "type": "string"
+     },
+     "staged": {
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "file"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "description": "Get parsed diff hunks for a specific file. Each hunk includes its header, content, and line count statistics.",
+   "name": "git-hunk",
+   "parameters": {
+    "additionalProperties": true,
+    "properties": {
+     "file": {
+      "type": "string"
+     },
+     "staged": {
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "file"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "description": "Analyze session logs for anomalies: high tool call counts, excessive turns/cycles, errors, and git issues. Scans session directories and reports findings without LLM calls.",
+   "name": "session-stats",
+   "parameters": {
+    "additionalProperties": true,
+    "properties": {
+     "all": {
+      "type": "boolean"
+     },
+     "high_tool_calls": {
+      "type": "integer"
+     },
+     "high_turns": {
+      "type": "integer"
+     },
+     "hours": {
+      "type": "integer"
+     },
+     "session_dir": {
+      "type": "string"
+     }
+    },
+    "type": "object"
+   }
+  },
+  {
+   "description": "Wait on a backgrounded shell command and return whatever it produced since the last wait. Blocks up to 60 seconds for new output or for the command to exit; use wait_sec for a shorter wait. Returns running=false and the exit code once it finishes, after which the handle is spent. Wait once with a generous wait_sec rather than calling this in a loop \u2014 each call is a round trip, and an empty result means nothing new since the last one, not that the command is stuck.",
+   "name": "bash_wait",
+   "parameters": {
+    "additionalProperties": true,
+    "properties": {
+     "handle": {
+      "type": "string"
+     },
+     "wait_sec": {
+      "type": "integer"
+     }
+    },
+    "required": [
+     "handle"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "description": "Stop a backgrounded shell command and every process it spawned. Returns any output produced since the last read.",
+   "name": "bash_kill",
+   "parameters": {
+    "additionalProperties": true,
+    "properties": {
+     "handle": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "handle"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "description": "Spawn a subagent to perform a task autonomously.\n\nModes:\n- Single: {agent: \"<name>\", task: \"<prompt>\"} \u2014 spawn one agent\n- Parallel: {tasks: [{agent: \"<name>\", task: \"<prompt>\"}, ...]} \u2014 run multiple agents concurrently (max 8)\n- Chain: {chain: [{agent: \"<name>\", task: \"<prompt>\"}, ...]} \u2014 run agents sequentially, passing results forward\n\nWorktree agents:\n- Agents marked [worktree] edit an isolated git worktree; their edits are not applied to the current tree. Ask for an exact patch/file list to apply, or use a non-worktree editing agent.\n\nReviewing a committed change (single mode, base):\n- A worktree is created at HEAD, so an agent sent to review an already-committed change sees a clean tree and an empty diff. Pass base to compare against that commit instead:\n  {agent: \"code-reviewer\", task: \"...\", base: \"main\"}\n- The worktree holds the current tip with its index at base, so the agent sees base..HEAD as a pending diff via git diff, and reads post-change file content.\n- This works for read-only agents too: base creates the worktree even when the agent's own definition sets none, which is what makes a read-only reviewer usable.\n- Reviewing a branch before merging: pass its merge base. For a pull request merged long ago, base alone compares against the current tip, so check that commit out first if you need exactly that diff.\n\nAvailable agents:\n- architect: Decide where code belongs \u2014 package boundaries, dependency direction, and whether a change fits the architecture, draw diagrams\n- codex-review: Codex CLI review agent \u2014 run a read-only code review of the uncommitted changes via the Codex app-server\n- discovery: Subagent discovery \u2014 find and load bundled subagent definitions\n- gemini: Gemini CLI ACP agent \u2014 spawn Google Gemini CLI via ACP protocol\n- memory-compressor: Compress tool observations into structured memory entries\n- copilot: GitHub Copilot CLI ACP agent \u2014 spawn GitHub Copilot via `copilot --acp --stdio`\n- quick-task: Complete small focused tasks with minimal overhead\n- task [worktree]: Complete coding tasks end-to-end in isolated worktree\n- claude: Claude Code ACP agent \u2014 spawn Claude Code via the @agentclientprotocol/claude-agent-acp subprocess adapter\n- code-reviewer: Review code for bugs, correctness, and style issues\n- codex: Codex CLI app-server agent \u2014 spawn OpenAI Codex via its direct JSON-RPC protocol\n- cursor: Cursor CLI ACP agent \u2014 spawn Cursor via `agent acp` (https://cursor.com/docs/cli/acp)\n- spec-reviewer: Review specifications and design documents\n- worker: General purpose worker agent for various tasks\n- agy: Google Antigravity ACP agent \u2014 spawn Antigravity via its `agy_acp_server` ACP binary\n- designer [worktree]: Design and modify code in isolated worktree\n- explore: Fast codebase research \u2014 find code, trace dependencies, map architecture\n- plan: Analyze codebase and create detailed implementation plans\n\nAt most 8 task(s) per call. This process runs 3 subagent(s) at a time, so batches larger than 3 queue rather than overlap. Each agent runs as a separate process.",
+   "name": "subagent",
+   "parameters": {
+    "additionalProperties": true,
+    "properties": {
+     "agent": {
+      "type": "string"
+     },
+     "base": {
+      "type": "string"
+     },
+     "chain": {
+      "items": {
+       "additionalProperties": true,
+       "properties": {
+        "agent": {
+         "type": "string"
+        },
+        "task": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "agent",
+        "task"
+       ],
+       "type": "object"
+      },
+      "type": [
+       "null",
+       "array"
+      ]
+     },
+     "task": {
+      "type": "string"
+     },
+     "tasks": {
+      "items": {
+       "additionalProperties": true,
+       "properties": {
+        "agent": {
+         "type": "string"
+        },
+        "task": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "agent",
+        "task"
+       ],
+       "type": "object"
+      },
+      "type": [
+       "null",
+       "array"
+      ]
+     }
+    },
+    "type": "object"
+   }
+  },
+  {
+   "description": "Search past observations using full-text search. Returns a compact table with IDs, titles, and types. Use mem-get to fetch full details.",
+   "name": "mem-search",
+   "parameters": {
+    "additionalProperties": true,
+    "properties": {
+     "limit": {
+      "type": "integer"
+     },
+     "project": {
+      "type": "string"
+     },
+     "query": {
+      "type": "string"
+     },
+     "type": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "query"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "description": "Show observations around an anchor observation in chronological order.",
+   "name": "mem-timeline",
+   "parameters": {
+    "additionalProperties": true,
+    "properties": {
+     "anchor": {
+      "type": "integer"
+     },
+     "depth_after": {
+      "type": "integer"
+     },
+     "depth_before": {
+      "type": "integer"
+     }
+    },
+    "required": [
+     "anchor"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "description": "Fetch full details for specific observations by ID. Use after mem-search or mem-timeline.",
+   "name": "mem-get",
+   "parameters": {
+    "additionalProperties": true,
+    "properties": {
+     "ids": {
+      "items": {
+       "type": "integer"
+      },
+      "type": [
+       "null",
+       "array"
+      ]
+     }
+    },
+    "required": [
+     "ids"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "description": "Show the current state of the memory palace: drawer count, wings, rooms, knowledge graph stats, and model status.",
+   "name": "palace-status",
+   "parameters": {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+   }
+  },
+  {
+   "description": "Search the memory palace for relevant knowledge. Uses semantic similarity when the embedding model is loaded, falls back to keyword search otherwise. Returns matching drawers with similarity scores.",
+   "name": "palace-search",
+   "parameters": {
+    "additionalProperties": false,
+    "properties": {
+     "limit": {
+      "type": "integer"
+     },
+     "query": {
+      "type": "string"
+     },
+     "room": {
+      "type": "string"
+     },
+     "wing": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "query"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "description": "Add a new knowledge drawer to the memory palace. Requires wing (project/domain), room (topic), and content. Automatically embeds the content for semantic search and checks for duplicates.",
+   "name": "palace-add-drawer",
+   "parameters": {
+    "additionalProperties": false,
+    "properties": {
+     "content": {
+      "type": "string"
+     },
+     "hall": {
+      "type": "string"
+     },
+     "importance": {
+      "type": "integer"
+     },
+     "room": {
+      "type": "string"
+     },
+     "source_file": {
+      "type": "string"
+     },
+     "wing": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "wing",
+     "room",
+     "content"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "description": "Add a fact (triple) to the knowledge graph. A triple consists of subject-predicate-object, e.g. 'Alice works_on auth-service'. Entities are auto-created. Duplicate active triples are detected.",
+   "name": "palace-kg-add",
+   "parameters": {
+    "additionalProperties": false,
+    "properties": {
+     "object": {
+      "type": "string"
+     },
+     "predicate": {
+      "type": "string"
+     },
+     "subject": {
+      "type": "string"
+     },
+     "valid_from": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "subject",
+     "predicate",
+     "object"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "description": "Query the knowledge graph for facts involving an entity. Returns triples where the entity appears as subject and/or object. Supports point-in-time queries with as_of parameter.",
+   "name": "palace-kg-query",
+   "parameters": {
+    "additionalProperties": false,
+    "properties": {
+     "as_of": {
+      "type": "string"
+     },
+     "direction": {
+      "type": "string"
+     },
+     "entity": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "entity"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "description": "Invalidate (end) an active fact in the knowledge graph. Sets the valid_to timestamp to now, marking the triple as no longer current. The fact remains in the timeline for historical queries.",
+   "name": "palace-kg-invalidate",
+   "parameters": {
+    "additionalProperties": false,
+    "properties": {
+     "object": {
+      "type": "string"
+     },
+     "predicate": {
+      "type": "string"
+     },
+     "subject": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "subject",
+     "predicate",
+     "object"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "description": "View the chronological timeline of all facts (including invalidated ones) for an entity. Useful for understanding how relationships evolved over time.",
+   "name": "palace-kg-timeline",
+   "parameters": {
+    "additionalProperties": false,
+    "properties": {
+     "entity": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "entity"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "description": "Extract candidate (subject, predicate, object) triples from a text chunk. Returns heuristic candidates (no LLM call). The agent should review and call palace-kg-add for the ones worth keeping. Code chunks (imports, declarations, file paths) yield the most reliable candidates; free-form prose yields few or none. Use this to bootstrap a knowledge graph from drawer text, observation text, or any other source.",
+   "name": "palace-kg-extract",
+   "parameters": {
+    "additionalProperties": false,
+    "properties": {
+     "max_triples": {
+      "type": "integer"
+     },
+     "source_file": {
+      "type": "string"
+     },
+     "text": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "text"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "description": "Write a diary entry to the memory palace. Each agent maintains its own diary. Diary entries are stored for later retrieval and also filed as searchable drawers in hall_diary.",
+   "name": "palace-diary-write",
+   "parameters": {
+    "additionalProperties": false,
+    "properties": {
+     "agent_name": {
+      "type": "string"
+     },
+     "entry": {
+      "type": "string"
+     },
+     "topic": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "agent_name",
+     "entry"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "description": "Read recent diary entries for an agent. Returns entries in reverse chronological order. Use to review past reflections, session notes, and ongoing thoughts.",
+   "name": "palace-diary-read",
+   "parameters": {
+    "additionalProperties": false,
+    "properties": {
+     "agent_name": {
+      "type": "string"
+     },
+     "last_n": {
+      "type": "integer"
+     }
+    },
+    "required": [
+     "agent_name"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "description": "Traverse the memory palace graph via BFS from a starting room. Discovers connected rooms across wings through shared topics. Useful for finding related knowledge areas you might not have searched for directly.",
+   "name": "palace-traverse",
+   "parameters": {
+    "additionalProperties": false,
+    "properties": {
+     "max_hops": {
+      "type": "integer"
+     },
+     "start_room": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "start_room"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "description": "List all symbols (functions, types, variables) in a file.\n\nReturns an overview of the file's structure including function definitions, type declarations, constants, and variables with their line ranges.",
+   "name": "lsp-symbols",
+   "parameters": {
+    "additionalProperties": true,
+    "properties": {
+     "file": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "file"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "description": "Get LSP diagnostics (errors, warnings) for a file.\n\nReturns compiler errors, type errors, and warnings from the language server. Use this to check a file for errors without editing it.",
+   "name": "lsp-diagnostics",
+   "parameters": {
+    "additionalProperties": true,
+    "properties": {
+     "file": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "file"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "description": "Search the web for current information on any topic. Use for news, facts, or data beyond your knowledge cutoff, and before answering any question about specific facts, figures or recent events. Returns snippets and source URLs. Results are short excerpts; read a page with tavily_extract to confirm what it says.",
+   "name": "tavily_search",
+   "parameters": {
+    "additionalProperties": false,
+    "properties": {
+     "country": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Boost search results from a specific country. Must be a full country name (e.g., 'United States', 'Japan', 'Germany'). ISO country codes (e.g., 'us', 'jp') are not supported. Available only if topic is general. See https://docs.tavily.com/documentation/api-reference/search for the full list of supported countries."
+     },
+     "end_date": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Will return all results before the specified end date. Required to be written in the format YYYY-MM-DD. Filters by publish date, not by when events happened; leave it empty when looking for facts about past events."
+     },
+     "exact_match": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Only return results containing the exact phrase(s) in quotes in your query"
+     },
+     "exclude_domains": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "List of domains to specifically exclude, if the user asks to exclude a domain set this to the domain of the site"
+     },
+     "filter_by_published_date": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Filter results to the requested date window and exclude results with no detected publication date"
+     },
+     "include_domains": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "A list of domains to specifically include in the search results, if the user asks to search on specific sites set this to the domain of the site. Use full domains such as 'en.wikipedia.org' or 'sec.gov', not suffixes such as 'edu'. This is a hard filter: if results come back empty or thin, search again without it."
+     },
+     "include_favicon": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Whether to include the favicon URL for each result"
+     },
+     "include_image_descriptions": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Include a list of query-related images and their descriptions in the response"
+     },
+     "include_images": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Include a list of query-related images in the response"
+     },
+     "include_published_date": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Include detected publication dates (beta)"
+     },
+     "include_raw_content": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Include the cleaned and parsed HTML content of each search result. Whole pages can make the response too large to read; to read one page, use tavily_extract with a query instead."
+     },
+     "max_results": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "The maximum number of search results to return. Ask for 10 when looking for a specific fact, page or entity."
+     },
+     "query": {
+      "description": "Search query. Keep it short and specific, in the words the page itself would use; one idea per query.",
+      "type": "string"
+     },
+     "search_depth": {
+      "anyOf": [
+       {
+        "enum": [
+         "basic",
+         "advanced",
+         "fast",
+         "ultra-fast"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "The depth of the search. 'basic' for generic results, 'advanced' for more thorough search, 'fast' for optimized low latency with high relevance, 'ultra-fast' for prioritizing latency above all else. Use 'advanced' when looking for a specific fact, page or entity, or when 'basic' did not find it."
+     },
+     "start_date": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Will return all results after the specified start date. Required to be written in the format YYYY-MM-DD. Filters by publish date, not by when events happened; leave it empty when looking for facts about past events."
+     },
+     "time_range": {
+      "anyOf": [
+       {
+        "enum": [
+         "day",
+         "week",
+         "month",
+         "year"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "The time range back from the current date to include in the search results. Filters by when a page was published, not by when the events it describes happened."
+     },
+     "topic": {
+      "anyOf": [
+       {
+        "enum": [
+         "general",
+         "news"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Search category. Use 'general' for almost all searches, including current events and requests that combine news with other information. Use 'news' only when the user explicitly asks for news, headlines, or news coverage."
+     }
+    },
+    "required": [
+     "query"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "description": "Extract content from URLs. Returns raw page content in markdown or text format. Use it to read a page in full or to confirm a fact found in search results. Pages that could not be read are listed in failed_results; retry a timeout once, then try another source.",
+   "name": "tavily_extract",
+   "parameters": {
+    "additionalProperties": false,
+    "properties": {
+     "extract_depth": {
+      "default": "basic",
+      "description": "Use 'advanced' for LinkedIn, protected sites, or tables/embedded content",
+      "enum": [
+       "basic",
+       "advanced"
+      ],
+      "type": "string"
+     },
+     "format": {
+      "default": "markdown",
+      "description": "Output format",
+      "enum": [
+       "markdown",
+       "text"
+      ],
+      "type": "string"
+     },
+     "include_favicon": {
+      "default": false,
+      "description": "Include favicon URLs",
+      "type": "boolean"
+     },
+     "include_images": {
+      "default": false,
+      "description": "Include images from pages",
+      "type": "boolean"
+     },
+     "include_usage": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Include credit usage"
+     },
+     "query": {
+      "default": "",
+      "description": "Query to rerank content chunks by relevance. Set it to get only the relevant passages of a long article or PDF. Leave it empty for tables, lists, data files and API responses, which it can cut short; read those whole, or request a narrower URL.",
+      "type": "string"
+     },
+     "urls": {
+      "description": "List of URLs to extract content from. Prefer URLs from search results; guessed page URLs often fail.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     }
+    },
+    "required": [
+     "urls"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "description": "Crawl a website starting from a URL. Extracts content from pages with configurable depth and breadth.",
+   "name": "tavily_crawl",
+   "parameters": {
+    "additionalProperties": false,
+    "properties": {
+     "allow_external": {
+      "default": true,
+      "description": "Whether to return external links in the final response",
+      "type": "boolean"
+     },
+     "chunks_per_source": {
+      "anyOf": [
+       {
+        "maximum": 5,
+        "minimum": 1,
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Chunks per source; requires instructions"
+     },
+     "extract_depth": {
+      "default": "basic",
+      "description": "Advanced extraction retrieves more data, including tables and embedded content, with higher success but may increase latency",
+      "enum": [
+       "basic",
+       "advanced"
+      ],
+      "type": "string"
+     },
+     "format": {
+      "default": "markdown",
+      "description": "The format of the extracted web page content. markdown returns content in markdown format. text returns plain text and may increase latency.",
+      "enum": [
+       "markdown",
+       "text"
+      ],
+      "type": "string"
+     },
+     "include_favicon": {
+      "default": false,
+      "description": "Whether to include the favicon URL for each result",
+      "type": "boolean"
+     },
+     "include_usage": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Include credit usage"
+     },
+     "instructions": {
+      "default": "",
+      "description": "Natural language instructions for the crawler. Instructions specify which types of pages the crawler should return.",
+      "type": "string"
+     },
+     "limit": {
+      "default": 50,
+      "description": "Total number of links the crawler will process before stopping",
+      "minimum": 1,
+      "type": "integer"
+     },
+     "max_breadth": {
+      "default": 20,
+      "description": "Max number of links to follow per level of the tree (i.e., per page)",
+      "minimum": 1,
+      "type": "integer"
+     },
+     "max_depth": {
+      "default": 1,
+      "description": "Max depth of the crawl. Defines how far from the base URL the crawler can explore.",
+      "minimum": 1,
+      "type": "integer"
+     },
+     "select_domains": {
+      "default": [],
+      "description": "Regex patterns to restrict crawling to specific domains or subdomains (e.g., ^docs\\.example\\.com$)",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "select_paths": {
+      "default": [],
+      "description": "Regex patterns to select only URLs with specific path patterns (e.g., /docs/.*, /api/v1.*)",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "url": {
+      "description": "The root URL to begin the crawl",
+      "type": "string"
+     }
+    },
+    "required": [
+     "url"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "description": "Map a website's structure. Returns a list of URLs found starting from the base URL.",
+   "name": "tavily_map",
+   "parameters": {
+    "additionalProperties": false,
+    "properties": {
+     "allow_external": {
+      "default": true,
+      "description": "Whether to return external links in the final response",
+      "type": "boolean"
+     },
+     "include_usage": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Include credit usage"
+     },
+     "instructions": {
+      "default": "",
+      "description": "Natural language instructions for the crawler",
+      "type": "string"
+     },
+     "limit": {
+      "default": 50,
+      "description": "Total number of links the crawler will process before stopping",
+      "minimum": 1,
+      "type": "integer"
+     },
+     "max_breadth": {
+      "default": 20,
+      "description": "Max number of links to follow per level of the tree (i.e., per page)",
+      "minimum": 1,
+      "type": "integer"
+     },
+     "max_depth": {
+      "default": 1,
+      "description": "Max depth of the mapping. Defines how far from the base URL the crawler can explore",
+      "minimum": 1,
+      "type": "integer"
+     },
+     "select_domains": {
+      "default": [],
+      "description": "Regex patterns to restrict crawling to specific domains or subdomains (e.g., ^docs\\.example\\.com$)",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "select_paths": {
+      "default": [],
+      "description": "Regex patterns to select only URLs with specific path patterns (e.g., /docs/.*, /api/v1.*)",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "url": {
+      "description": "The root URL to begin the mapping",
+      "type": "string"
+     }
+    },
+    "required": [
+     "url"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "description": "Perform comprehensive research on a given topic or question. Use this tool when you need to gather information from multiple sources, including web pages, documents, and other resources, to answer a question or complete a task. Returns a detailed response based on the research findings. Rate limit: 20 requests per minute.",
+   "name": "tavily_research",
+   "parameters": {
+    "additionalProperties": false,
+    "properties": {
+     "files": {
+      "anyOf": [
+       {
+        "items": {
+         "properties": {
+          "data": {
+           "type": "string"
+          },
+          "name": {
+           "type": "string"
+          },
+          "type": {
+           "const": "base64",
+           "default": "base64",
+           "type": "string"
+          }
+         },
+         "required": [
+          "name",
+          "data"
+         ],
+         "type": "object"
+        },
+        "maxItems": 5,
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Base64 .txt/.md/.json attachments; up to 80000 words combined"
+     },
+     "input": {
+      "description": "A comprehensive description of the research task",
+      "type": "string"
+     },
+     "model": {
+      "default": "auto",
+      "description": "Defines the degree of depth of the research. 'mini' is good for narrow tasks with few subtopics. 'pro' is good for broad tasks with many subtopics",
+      "enum": [
+       "mini",
+       "pro",
+       "auto"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "input"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "description": "Search the web for any topic and get clean, ready-to-use content.\n\n      Best for: Finding current information, news, facts, people, companies, or answering questions about any topic.\n      Returns: Clean text content from top search results.\n\n      Query tips:\n      describe the ideal page, not keywords. \"blog post comparing React and Vue performance\" not \"React vs Vue\".\n      Use category:people / category:company to search through Linkedin profiles / companies respectively.\n      If highlights are insufficient, follow up with web_fetch_exa on the best URLs.",
+   "name": "web_search_exa",
+   "parameters": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+     "numResults": {
+      "description": "Number of search results to return (default: 10).",
+      "type": "number"
+     },
+     "objective": {
+      "description": "Goal for this search turn; say which documents should rank first, which should be excluded, and what specific facts or figures to pull from them.",
+      "maxLength": 4096,
+      "minLength": 1,
+      "type": "string"
+     },
+     "query": {
+      "description": "Natural language search query. Should be a semantically rich description of the ideal page, not just keywords. Optionally include category:<type> (company, people) to focus results \u2014 e.g. 'category:people John Doe software engineer'.",
+      "minLength": 1,
+      "type": "string"
+     }
+    },
+    "required": [
+     "query",
+     "objective"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "description": "Read a webpage's full content as clean markdown. Use after web_search_exa when highlights are insufficient or to read any URL.\n\nBest for: Extracting full content from known URLs. Batch multiple URLs in one call.\nReturns: Clean text content and metadata from the page(s).",
+   "name": "web_fetch_exa",
+   "parameters": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+     "maxCharacters": {
+      "description": "Maximum characters to extract per page (default: 3000)",
+      "minimum": 1,
+      "type": "number"
+     },
+     "urls": {
+      "description": "URLs to read. Batch multiple URLs in one call.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     }
+    },
+    "required": [
+     "urls"
+    ],
+    "type": "object"
+   }
+  },
+  {
+   "description": "Start or resume an Exa Agent run for multi-step research, list-building, or enrichment. Use it instead of running many searches yourself when a task needs multiple searches, cross-source verification, or a structured table of results. Long-running: returns a run ID; resume with runId when the tool reports the run is still running. Not for a single question or lookup (use web_search_exa) or reading a known URL (use web_fetch_exa). An interrupted tool call is not an explicit cancellation request.",
+   "name": "agent_run",
+   "parameters": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+     "budget": {
+      "additionalProperties": false,
+      "description": "Per-run spend and duration limits for the metered auto and ultra efforts. Set it when the user names a cost or time limit.",
+      "properties": {
+       "maxCostDollars": {
+        "description": "Maximum spend for the run in US dollars, $1\u2013$100. Only for effort auto or ultra; defaults to $5 for auto and $20 for ultra.",
+        "type": "number"
+       },
+       "maxDurationSeconds": {
+        "description": "Soft wall-clock limit in seconds, 300\u201310800. Only for effort ultra; the run returns what it has found as it nears the limit.",
+        "type": "integer"
+       }
+      },
+      "type": "object"
+     },
+     "dataSources": {
+      "description": "Exa Connect providers to enable for this run.",
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "provider": {
+         "description": "Exa Connect provider ID. Self-serve providers: fiber, financial_datasets, similarweb, baselayer, affiliate, particle, jinko, polymarket, macrobond. Other providers work only when enabled for your Exa team.",
+         "minLength": 1,
+         "type": "string"
+        }
+       },
+       "required": [
+        "provider"
+       ],
+       "type": "object"
+      },
+      "maxItems": 5,
+      "type": "array"
+     },
+     "effort": {
+      "description": "Agent effort level. Defaults to low.",
+      "enum": [
+       "minimal",
+       "low",
+       "medium",
+       "high",
+       "xhigh",
+       "ultra",
+       "auto"
+      ],
+      "type": "string"
+     },
+     "input": {
+      "additionalProperties": false,
+      "properties": {
+       "data": {
+        "description": "Known rows/entities to enrich or process.",
+        "items": {
+         "additionalProperties": {},
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "exclusion": {
+        "description": "Entities, rows, or records Agent should avoid returning again.",
+        "items": {
+         "additionalProperties": {},
+         "type": "object"
+        },
+        "type": "array"
+       }
+      },
+      "type": "object"
+     },
+     "outputSchema": {
+      "additionalProperties": {},
+      "description": "JSON Schema describing the desired research output. Prefer a top-level object with bounded arrays and source/evidence fields.",
+      "type": "object"
+     },
+     "previousRunId": {
+      "description": "ID of a completed prior run to use as context for a new run.",
+      "pattern": "^agent_run_",
+      "type": "string"
+     },
+     "query": {
+      "description": "Natural-language research or enrichment objective. Provide query or runId, not both.",
+      "minLength": 1,
+      "type": "string"
+     },
+     "runId": {
+      "description": "ID returned by an earlier call. Use it to check or continue waiting for the same run. Do not start a duplicate run.",
+      "pattern": "^agent_run_",
+      "type": "string"
+     },
+     "systemPrompt": {
+      "description": "System-level guidance for the Agent.",
+      "type": "string"
+     }
+    },
+    "type": "object"
+   }
+  }
+ ]
+}

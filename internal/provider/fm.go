@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"iter"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"google.golang.org/adk/v2/model"
+	"google.golang.org/genai"
 )
 
 // fmDefaultBaseURL is where `fm serve` listens by default — Apple's Foundation
@@ -35,6 +37,38 @@ const (
 // that does not exist here.
 const fmMaxOutputTokens int64 = 4096
 
+// fmContextWindow is the token budget `fm serve` enforces on the whole request,
+// measured against a running server rather than taken from a spec sheet.
+//
+// The server names the number itself when it rejects a request ("Provided 8,910
+// tokens, but the maximum allowed is 8,192"), and bisecting a plain-text prompt
+// agrees: the largest accepted request was 32,812 characters of prose, which is
+// 8,203 tokens at the calibrated rate in fmCharsPerToken.
+//
+// What fits, measured: the on-device model, a short prompt, and all 40 of pi's
+// tool declarations — 7,749 tokens of the 8,192, and it answers with tool calls.
+// What does not fit: pi-go's default system prompt, 13,376 tokens by itself, so
+// the coding agent's turn can never be sent here. That is the conclusion the
+// numbers force, and fmMeasureRequest is what turns it into a message instead of
+// a 400.
+const fmContextWindow int64 = 8192
+
+// fmCharsPerToken converts the rendered request into tokens.
+//
+// 4 is the calibrated value, checked against the server's own token counts for
+// four requests rather than assumed. Measured wire characters per server-reported
+// token: 4.20, 4.19, 4.41 and 4.01. Divisors of 3 and 5 were both tried and both
+// misclassified real requests — 3 refused a 40-tool request the server accepts
+// (predicting 10,840 tokens against an actual 7,749), and 5 passed a request the
+// server rejects (6,910 against an actual 8,249).
+//
+// At 4 the only disagreement is a no-tools prompt of 32,812 characters: the
+// server accepts it at exactly 8,192, and this estimate calls it 8,203. That errs
+// toward refusing, which is the direction to be wrong in — the alternative is a
+// round trip that ends in "Provided 8,910 tokens, but the maximum allowed is
+// 8,192" with nothing the user can act on.
+const fmCharsPerToken = 4
+
 // fmHealthProbeTimeout bounds one reachability check. fm answers a loopback
 // /health in single-digit milliseconds, so this only has to outlast a machine
 // under load, not a network round trip.
@@ -55,10 +89,9 @@ const fmStartupTimeout = 8 * time.Second
 //
 // The context window is 8192 tokens — Apple's on-device ceiling, measured
 // against a running server: a request reporting 8096 prompt tokens succeeds and
-// anything past 8192 is rejected with "Provided N tokens, but the maximum
-// allowed is 8192". That is smaller than pi-go's own default system prompt, so
-// this provider suits roles that pass no tools; the catalog entry in
-// modeldata/context-windows.json keeps auto-compaction honest about the size.
+// anything past 8192 is rejected. That is smaller than pi-go's own default
+// system prompt, so the request is checked against it before it is sent rather
+// than being answered with an opaque rejection; see fmMeasureRequest.
 func NewFoundationModels(ctx context.Context, modelName, apiKey, baseURL string, opts *LLMOptions) (model.LLM, error) {
 	if !isFoundationModel(modelName) {
 		return nil, fmt.Errorf("unknown Foundation Models model %q; known models: %s, %s",
@@ -80,8 +113,14 @@ func NewFoundationModels(ctx context.Context, modelName, apiKey, baseURL string,
 	return fmAlwaysStreamingModel{LLM: llm}, nil
 }
 
-// fmAlwaysStreamingModel forces the streaming code path regardless of what the
-// caller asked for.
+// fmAlwaysStreamingModel rewrites each request into the shape `fm serve`
+// accepts, then forces the streaming code path regardless of what the caller
+// asked for.
+//
+// Two independent defects are fixed here, both measured against a running
+// server rather than inferred from documentation.
+//
+// # Streaming
 //
 // `fm serve` streams from /v1/chat/completions unless the request says
 // `stream: false`, and the OpenAI SDK never sends that field — it is not part of
@@ -92,15 +131,42 @@ func NewFoundationModels(ctx context.Context, modelName, apiKey, baseURL string,
 //	expected destination type of 'string' or '[]byte' for responses with
 //	content-type 'text/event-stream' that is not 'application/json'
 //
-// Measured against `fm serve`, not inferred. Forcing the streaming path avoids
-// the mismatch instead of rewriting the wire: it is the shape this server always
-// produces, and the streaming accumulator already yields a final non-partial
-// response, so a caller that asked for one response still gets one.
+// Forcing the streaming path avoids the mismatch instead of rewriting the wire:
+// it is the shape this server always produces, and the streaming accumulator
+// already yields a final non-partial response, so a caller that asked for one
+// response still gets one.
+//
+// # Tool schemas and the context window
+//
+// fm compiles every tool schema into a Swift GenerationSchema and rejects the
+// whole request — 400, naming no field — if any one of them uses a keyword
+// outside that model. pi's own tool set uses several, so *every* tool-using fm
+// turn failed. fmSanitizeTools rewrites them; the rejected keywords and the
+// measurements behind them are documented there.
+//
+// The window is the second wall: 8192 tokens. Sanitized, the tool declarations
+// fit (7,749 tokens with a short prompt, and the model answers). pi-go's default
+// system prompt does not — 13,376 on its own — so the coding agent's turn can
+// never be sent here, however the schemas are rewritten. A request that cannot
+// fit is refused with a message naming the limit, the per-part breakdown, and
+// the largest part, instead of spending a round trip to be told "400 Bad
+// Request" with nothing to act on.
 type fmAlwaysStreamingModel struct {
 	model.LLM
 }
 
 func (m fmAlwaysStreamingModel) GenerateContent(ctx context.Context, req *model.LLMRequest, _ bool) iter.Seq2[*model.LLMResponse, error] {
+	fmPrepareRequest(req)
+	if budget := fmMeasureRequest(req); budget.total > fmContextWindow {
+		return func(yield func(*model.LLMResponse, error) bool) {
+			yield(nil, fmt.Errorf(
+				"the request is roughly %d tokens, over the %d-token context window of `fm serve` "+
+					"(%d for the system prompt, %d for the transcript, %d for tool declarations). "+
+					"Foundation Models is an on-device model with an 8K window: %s",
+				budget.total, fmContextWindow, budget.system, budget.contents, budget.tools,
+				budget.advice()))
+		}
+	}
 	return m.LLM.GenerateContent(ctx, req, true)
 }
 
@@ -250,4 +316,167 @@ func fmServerLogPath() string {
 		return filepath.Join(os.TempDir(), "pi-go-fm-serve.log")
 	}
 	return filepath.Join(home, ".pi-go", "fm-serve.log")
+}
+
+// fmPrepareRequest rewrites a request into the shape `fm serve` accepts: tool
+// schemas limited to the JSON Schema subset it can compile.
+//
+// It mutates in place, which is what the caller wants — the same request is
+// what any later inspection and the session log will show.
+func fmPrepareRequest(req *model.LLMRequest) {
+	if req == nil {
+		return
+	}
+	fmSanitizeTools(req.Config)
+}
+
+// fmBudget is a request's estimated token spend, split into the parts a user can
+// actually do something about.
+//
+// The split exists because the total alone misleads. The first version of this
+// guard reported only a total and blamed the system prompt; against a request
+// whose tools were the bulk of it, that sent the user to change the wrong thing.
+type fmBudget struct {
+	system   int64
+	contents int64
+	tools    int64
+	total    int64
+}
+
+// advice names the largest part of the request, since that is what has to shrink
+// for the request to fit.
+func (b fmBudget) advice() string {
+	switch {
+	case b.tools >= b.system && b.tools >= b.contents:
+		return "the tool declarations are the largest part, so run fm with a role that registers no tools " +
+			"(or a smaller tool set), or use a different model for this session"
+	case b.system >= b.contents:
+		return "the system prompt is the largest part, so pass a short one with --system, or use a " +
+			"different model for this session"
+	default:
+		return "the transcript is the largest part, so start a new session or compact this one, or use " +
+			"a different model for this session"
+	}
+}
+
+// fmMeasureRequest reports the token budget a request will spend at `fm serve`.
+//
+// The count covers everything the server counts — the system instruction, the
+// transcript, and the tool declarations — because fm enforces one budget across
+// all of them. Checking only the prompt would pass a request that the tool
+// declarations alone push over the limit.
+//
+// It measures the *wire* shape rather than the genai structs, because that is
+// what the server reads. Measuring the difference was not academic: counting only
+// names, descriptions and parameter schemas under-reported a real 40-tool request
+// by enough to let it through, and the server answered
+//
+//	500 Provided 8,910 tokens, but the maximum allowed is 8,192.
+func fmMeasureRequest(req *model.LLMRequest) fmBudget {
+	if req == nil {
+		return fmBudget{}
+	}
+	var b fmBudget
+	tokens := func(s string) int64 { return int64(len(s) / fmCharsPerToken) }
+
+	if req.Config != nil {
+		b.system = tokens(fmJSONString(fmWireSystemInstruction(req.Config.SystemInstruction)))
+		if tools := fmWireTools(req.Config.Tools); len(tools) > 0 {
+			b.tools = tokens(fmJSONString(tools))
+		}
+	}
+	var contents strings.Builder
+	for _, c := range req.Contents {
+		contents.WriteString(fmJSONString(fmWireContent(c)))
+	}
+	b.contents = tokens(contents.String())
+	b.total = b.system + b.contents + b.tools
+	return b
+}
+
+// fmWireSystemInstruction renders the system instruction the way the OpenAI
+// request carries it.
+func fmWireSystemInstruction(c *genai.Content) any {
+	if c == nil {
+		return nil
+	}
+	return map[string]any{"role": "system", "content": fmContentText(c)}
+}
+
+// fmWireContent renders one transcript entry the way the request carries it.
+func fmWireContent(c *genai.Content) any {
+	if c == nil {
+		return nil
+	}
+	role := c.Role
+	if role == "" || role == "model" {
+		role = "assistant"
+	}
+	return map[string]any{"role": role, "content": fmContentText(c)}
+}
+
+// fmContentText joins a content's parts into the text the server sees.
+//
+// Tool calls and their results are rendered with their payloads rather than
+// dropped: a tool result can be tens of kilobytes, and it is exactly the part
+// that blows the window.
+func fmContentText(c *genai.Content) string {
+	var b strings.Builder
+	for _, p := range c.Parts {
+		if p == nil {
+			continue
+		}
+		b.WriteString(p.Text)
+		if p.FunctionCall != nil {
+			b.WriteString(p.FunctionCall.Name)
+			b.WriteString(fmJSONString(p.FunctionCall.Args))
+		}
+		if p.FunctionResponse != nil {
+			b.WriteString(p.FunctionResponse.Name)
+			b.WriteString(fmJSONString(p.FunctionResponse.Response))
+		}
+	}
+	return b.String()
+}
+
+// fmWireTools renders the tool declarations the way the OpenAI request carries
+// them, wrapper included.
+func fmWireTools(tools []*genai.Tool) []any {
+	var out []any
+	for _, t := range tools {
+		if t == nil {
+			continue
+		}
+		for _, fd := range t.FunctionDeclarations {
+			if fd == nil {
+				continue
+			}
+			params := fd.ParametersJsonSchema
+			if params == nil {
+				params = map[string]any{"type": "object", "properties": map[string]any{}}
+			}
+			out = append(out, map[string]any{
+				"type": "function",
+				"function": map[string]any{
+					"name":        fd.Name,
+					"description": fd.Description,
+					"parameters":  params,
+				},
+			})
+		}
+	}
+	return out
+}
+
+// fmJSONString encodes v, returning "" when it cannot be encoded — a value that
+// will not marshal contributes nothing to a count anyway.
+func fmJSONString(v any) string {
+	if v == nil {
+		return ""
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
