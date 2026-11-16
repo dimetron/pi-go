@@ -2561,15 +2561,34 @@ func isResizeTextFragment(msg tea.KeyPressMsg) bool {
 	return msg.Key().Text != ""
 }
 
+// sidebarVisible reports whether there is room for a sidebar column at all.
+//
+// It needs columns to be worth having — the panel must keep more than 80 of
+// them — and it needs the frame to be wider than it is tall. A portrait window
+// is the mobile case: a terminal opened from a phone browser through `pi serve`
+// is tall and narrow, and there the sidebar's fixed columns are a quarter of
+// the width spent on a column of short labels, while the chat — the only thing
+// being read — is squeezed into what is left. Dropping the sidebar hands those
+// columns back to the chat.
+func (m *model) sidebarVisible() bool {
+	if m.width <= 80 {
+		return false
+	}
+	// height == 0 is an unsized frame (before the first WindowSizeMsg, and in
+	// tests that only set a width), not a portrait one — keep the sidebar.
+	return m.height <= 0 || m.width >= m.height
+}
+
 // sidebarWidth returns how many columns the sidebar column occupies this frame:
 // SidebarWidth expanded, SidebarStripWidth collapsed, 0 when it is not drawn at
-// all (a narrow terminal, or one with no column to spare for the strip).
+// all (the frame is too narrow or too portrait, or has no column to spare for
+// the strip).
 //
 // Collapsing needs the strip's own column plus a chat panel still worth reading;
 // below that there is not a column to spare for the control that would restore
 // the panel, so asking to collapse on such a frame simply leaves it as it was.
 func (m *model) sidebarWidth() int {
-	if m.width <= 80 {
+	if !m.sidebarVisible() {
 		return 0
 	}
 	if m.sidebarCollapsed {
