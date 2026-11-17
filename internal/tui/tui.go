@@ -148,6 +148,12 @@ type model struct {
 	// topSectionRows is the number of rows in the top section (messages + sidebar)
 	// before the full-width status bar. The rail and sidebar only cover these rows.
 	topSectionRowsVal int
+	// sidebarCollapsed is the user's choice to put the sidebar away, set by
+	// clicking the collapse glyph on its version row. It is a preference, not a
+	// layout fact: sidebarVisible still drops the sidebar on a frame too narrow
+	// for it, and restoring the preference does not force it back on such a
+	// frame.
+	sidebarCollapsed bool
 	// The selectable rows: the message viewport, half-open. Everything else in
 	// the panel is chrome — the matrix rain, the rules, the status bar, the
 	// prompt — and selecting it yields nothing anyone wants on their clipboard.
@@ -1298,6 +1304,23 @@ func (m *model) handleMouseClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 		m.clearConversation()
 		return m, tea.Batch(cmd, m.setFlash("Context cleared"))
 	}
+	// The sidebar's collapse control is a control too, and it sits in the top
+	// row of the sidebar column — which the off-panel branch below would
+	// otherwise swallow as a click on nothing. Both forms are hit-tested in one
+	// place: the hide glyph on the version row, and the strip that replaces the
+	// whole panel once it is collapsed.
+	if m.hitSidebarToggle(mouse.X, mouse.Y) {
+		m.sel = selection{}
+		m.sidebarCollapsed = !m.sidebarCollapsed
+		// The chat viewport's width changes with the sidebar, so re-render the
+		// message wrap now rather than leaving the transcript wrapped for the old
+		// panel until the next resize.
+		m.applyResize()
+		if m.sidebarCollapsed {
+			return m, m.setFlash("Sidebar hidden — click " + sidebarRestoreGlyph + " to restore")
+		}
+		return m, m.setFlash("Sidebar shown")
+	}
 	// Only the chat panel is selectable. A press on the rail or in the sidebar
 	// starts nothing — and clears any highlight, the same as a click anywhere
 	// else would.
@@ -1958,8 +1981,6 @@ func (m *model) View() tea.View {
 		mainWidth = m.mainWidth()
 	}
 	bodyWidth := m.chatWidth()
-	sidebarWidth := m.width - mainWidth
-	showSidebar := sidebarWidth > 0
 
 	// Render components.
 	m.inputModel.SetWidth(max(0, m.width-3))
@@ -2046,10 +2067,14 @@ func (m *model) View() tea.View {
 	leftPanel := lipgloss.JoinHorizontal(lipgloss.Top, body, rail)
 
 	var topSection string
-	if showSidebar {
-		sidebar := RenderSidebar(m.sidebarRenderInput(sidebarWidth, panelRows))
-		topSection = joinPanelSidebar(leftPanel, sidebar, mainWidth, sidebarWidth)
-	} else {
+	switch sw := m.sidebarWidth(); {
+	case sw == SidebarStripWidth:
+		strip := RenderSidebarStrip(m.sidebarRenderInput(sw, panelRows))
+		topSection = joinPanelSidebar(leftPanel, strip, mainWidth, sw)
+	case sw > 0:
+		sidebar := RenderSidebar(m.sidebarRenderInput(sw, panelRows))
+		topSection = joinPanelSidebar(leftPanel, sidebar, mainWidth, sw)
+	default:
 		topSection = padLinesTo(leftPanel, m.width)
 	}
 
@@ -2536,15 +2561,34 @@ func isResizeTextFragment(msg tea.KeyPressMsg) bool {
 	return msg.Key().Text != ""
 }
 
+// sidebarWidth returns how many columns the sidebar column occupies this frame:
+// SidebarWidth expanded, SidebarStripWidth collapsed, 0 when it is not drawn at
+// all (a narrow terminal, or one with no column to spare for the strip).
+//
+// Collapsing needs the strip's own column plus a chat panel still worth reading;
+// below that there is not a column to spare for the control that would restore
+// the panel, so asking to collapse on such a frame simply leaves it as it was.
+func (m *model) sidebarWidth() int {
+	if m.width <= 80 {
+		return 0
+	}
+	if m.sidebarCollapsed {
+		if m.width-SidebarStripWidth > 80 {
+			return SidebarStripWidth
+		}
+		return 0
+	}
+	return SidebarWidth
+}
+
 // mainWidth returns the width of the main panel (excluding sidebar).
 func (m *model) mainWidth() int {
 	if m.width <= 0 {
 		return 1
 	}
-	if m.width > 80 {
-		w := m.width - SidebarWidth
-		if w > 0 {
-			return w
+	if w := m.sidebarWidth(); w > 0 {
+		if main := m.width - w; main > 0 {
+			return main
 		}
 	}
 	return m.width

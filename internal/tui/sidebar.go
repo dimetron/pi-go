@@ -24,11 +24,36 @@ import (
 
 // SidebarWidth is the fixed width of the right sidebar.
 //
-// 23 is the 18 it used to be, widened by 5: the sidebar's rows are short labels
-// and counts, so the columns it gives back to the chat panel are worth more than
-// the slack it keeps. Every consumer reads this constant — mainWidth, the
-// render-integrity test's column check — so the whole frame follows from it.
-const SidebarWidth = 23
+// It was 18, then 23, and is now 28. Each step was bought with the same argument:
+// the columns a too-narrow sidebar wastes are not slack, they are content cut
+// short — at 23 a branch named feat/sidebar-toggle rendered as feat/sidebar-…,
+// losing exactly the part that says which work is in progress. 28 leaves a
+// 19-character branch name whole, which covers the branch names this repo
+// actually uses (feat/<topic>, fix/<topic>) without asking the chat for much:
+// the panel gives up 5 of 160 columns, and the fold below already handles the
+// height this width does not add.
+//
+// Every consumer reads this constant — mainWidth, the render-integrity test's
+// column check — so the whole frame follows from it.
+const SidebarWidth = 28
+
+// SidebarStripWidth is the width of the collapsed sidebar: one column, the
+// restore glyph alone. Collapsing hands SidebarWidth-1 columns back to the chat
+// while leaving something to click, so the panel can be brought back with the
+// mouse rather than only by its key.
+const SidebarStripWidth = 1
+
+// Sidebar collapse glyphs.
+//
+// Both are width-safe (Neutral in every width table, one cell): a glyph that
+// renders two cells wide would shove the rail and the chat a column left the
+// moment the sidebar was collapsed or restored. The restore glyph also has to
+// stay distinguishable from the rail track, since in the strip they sit in
+// adjacent columns.
+const (
+	sidebarHideGlyph    = "»" // on the version row: click to collapse
+	sidebarRestoreGlyph = "‹" // the collapsed strip: click to expand
+)
 
 // SidebarRenderInput provides data needed by the sidebar.
 type SidebarRenderInput struct {
@@ -461,14 +486,83 @@ func sidebarMoodLines(in SidebarRenderInput, st sidebarStyles) []string {
 // another shell. It is rendered topmost because it qualifies every other
 // section: behavior that looks wrong in this session is only diagnosable if
 // you know which build produced it.
+//
+// The row also carries the collapse control, right-aligned. The sidebar is a
+// fixed column of short labels, and on a narrow terminal those columns are
+// worth more to the chat; the version row is the panel's identity row, which is
+// where a reader looks for "what is this panel, and can I put it away".
+//
+// The glyph goes in the panel's own right-hand padding rather than out of the
+// label's budget. innerW excludes that padding (the box pads the row out to its
+// width), so aiming the glyph at the row's last cell keeps the whole version
+// string visible — truncating the build name to make room for a button would
+// cost exactly the diagnostic this row exists to show.
+//
+// The glyph is drawn unconditionally, even when the version is empty, or the
+// control would vanish on precisely the builds that show no version string.
 func sidebarVersionLines(in SidebarRenderInput, innerW int, st sidebarStyles) []string {
-	if in.AppVersion == "" {
-		return nil
+	const padRight = 3 // the panel's right-hand padding, outside innerW
+	rowW := innerW + padRight
+	label := ""
+	if in.AppVersion != "" {
+		label = "pi-go " + in.AppVersion
 	}
+	// Indent, one gap cell, and the glyph are not the label's to spend.
+	label = truncateLabel(label, max(rowW-2-2, 0))
+	gap := max(rowW-1-2-runewidth.StringWidth(label), 1)
 	return []string{
-		st.dim.Render("  " + truncateLabel("pi-go "+in.AppVersion, innerW)),
+		st.dim.Render("  " + label + strings.Repeat(" ", gap) + sidebarHideGlyph),
 		"",
 	}
+}
+
+// hitSidebarToggle reports whether a screen coordinate lands on the control that
+// collapses or restores the sidebar.
+//
+// The expanded target is the version row — the whole row, not just the glyph, so
+// the control is not one cell wide — because that row is the panel's identity
+// row and the natural place to look for "put this away". The collapsed target is
+// the strip's full height in its one column, so restoring it does not depend on
+// hitting the glyph precisely. Neither can overlap the chat: both require a
+// column at or past the chat panel's right edge.
+func (m *model) hitSidebarToggle(x, y int) bool {
+	sw := m.sidebarWidth()
+	if sw == 0 || m.frameRows <= 0 {
+		return false
+	}
+	if x < m.mainWidth() {
+		return false
+	}
+	row := m.frameRow(y)
+	if row < 0 {
+		return false
+	}
+	if sw == SidebarStripWidth {
+		return row < max(1, m.topSectionRows())
+	}
+	return row == 0 // the version row, top of the expanded panel
+}
+
+// RenderSidebarStrip renders the collapsed sidebar: one column carrying the
+// glyph that brings the panel back.
+//
+// It is a full-height click target rather than a single glyph, so restoring the
+// panel does not require hitting one cell on the first row — and it is drawn in
+// the same column the sidebar occupied, so the control that restores the panel
+// appears where the panel was.
+func RenderSidebarStrip(in SidebarRenderInput) string {
+	st := newSidebarStyles(paletteOrDark(in.Palette))
+	rows := max(in.Height, 1)
+	lines := make([]string, rows)
+	for i := range lines {
+		if i == rows-1 {
+			lines[i] = st.surface.Render("─") // meet the panel's closing rule
+			continue
+		}
+		lines[i] = " "
+	}
+	lines[0] = st.heading.Render(sidebarRestoreGlyph)
+	return strings.Join(lines, "\n")
 }
 
 // sidebarModelLines shows the active provider, model name and reasoning level.
