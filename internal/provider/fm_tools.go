@@ -2,6 +2,7 @@ package provider
 
 import (
 	"encoding/json"
+	"slices"
 
 	"google.golang.org/genai"
 )
@@ -136,6 +137,18 @@ func fmSanitizeSchemaMap(schema map[string]any) any {
 			}
 			out[k] = v
 			continue
+		case "properties":
+			// The keys here are parameter names, not keywords: a parameter
+			// called "pattern" (find, ripgrep) must survive even though the
+			// keyword of that name is dropped. Only the values are schemas.
+			if props, ok := v.(map[string]any); ok {
+				sanitized := make(map[string]any, len(props))
+				for name, prop := range props {
+					sanitized[name] = fmSanitizeSchema(prop)
+				}
+				out[k] = sanitized
+				continue
+			}
 		}
 		if fmSchemaKeywordsDrop[k] {
 			continue
@@ -178,6 +191,7 @@ func fmSanitizeSchemaMap(schema map[string]any) any {
 				out["required"] = kept
 			}
 		}
+		out["x-order"] = fmPropertyOrder(typed, out["required"])
 	}
 
 	// An array must say what it holds.
@@ -190,6 +204,37 @@ func fmSanitizeSchemaMap(schema map[string]any) any {
 	}
 
 	return out
+}
+
+// fmPropertyOrder returns the "x-order" for an object: the order in which the
+// model generates its properties. Without it fm serve warns and generates them
+// alphabetically, so edit's new_string comes before its old_string. The source
+// order is gone by the time the schema is a map, so this puts the required
+// properties first, in the order they are listed, then the rest by name.
+func fmPropertyOrder(props map[string]any, required any) []any {
+	order := make([]any, 0, len(props))
+	seen := make(map[string]bool, len(props))
+	if list, ok := required.([]any); ok {
+		for _, r := range list {
+			name, ok := r.(string)
+			if !ok {
+				continue
+			}
+			order = append(order, name)
+			seen[name] = true
+		}
+	}
+	rest := make([]string, 0, len(props))
+	for name := range props {
+		if !seen[name] {
+			rest = append(rest, name)
+		}
+	}
+	slices.Sort(rest)
+	for _, name := range rest {
+		order = append(order, name)
+	}
+	return order
 }
 
 // fmFirstNonNullBranch returns the first branch whose type is not "null".

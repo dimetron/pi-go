@@ -47,10 +47,12 @@ const fmMaxOutputTokens int64 = 4096
 //
 // What fits, measured: the on-device model, a short prompt, and all 40 of pi's
 // tool declarations — 7,749 tokens of the 8,192, and it answers with tool calls.
-// What does not fit: pi-go's default system prompt, 13,376 tokens by itself, so
-// the coding agent's turn can never be sent here. That is the conclusion the
-// numbers force, and fmMeasureRequest is what turns it into a message instead of
-// a 400.
+// What does not fit: pi-go's default start. Its system prompt alone measured
+// 18,312 tokens and its tool declarations 8,108, so internal/cli starts a model
+// this small on the compact profile instead (compactContextWindow): a short
+// prompt and the essential tools, about 2,600 tokens for a whole first turn.
+// fmMeasureRequest still guards the window, and turns a request that outgrows
+// it into a message instead of a 400.
 const fmContextWindow int64 = 8192
 
 // fmCharsPerToken converts the rendered request into tokens.
@@ -146,8 +148,8 @@ func NewFoundationModels(ctx context.Context, modelName, apiKey, baseURL string,
 //
 // The window is the second wall: 8192 tokens. Sanitized, the tool declarations
 // fit (7,749 tokens with a short prompt, and the model answers). pi-go's default
-// system prompt does not — 13,376 on its own — so the coding agent's turn can
-// never be sent here, however the schemas are rewritten. A request that cannot
+// system prompt does not, so a session on this provider starts on the compact
+// profile (internal/cli, compactContextWindow). A request that still cannot
 // fit is refused with a message naming the limit, the per-part breakdown, and
 // the largest part, instead of spending a round trip to be told "400 Bad
 // Request" with nothing to act on.
@@ -451,7 +453,7 @@ func fmWireTools(tools []*genai.Tool) []any {
 			if fd == nil {
 				continue
 			}
-			params := fd.ParametersJsonSchema
+			params := fmWithoutOrder(fd.ParametersJsonSchema)
 			if params == nil {
 				params = map[string]any{"type": "object", "properties": map[string]any{}}
 			}
@@ -466,6 +468,31 @@ func fmWireTools(tools []*genai.Tool) []any {
 		}
 	}
 	return out
+}
+
+// fmWithoutOrder returns schema with every "x-order" removed, for measuring.
+// The server compiles x-order into the generation order and does not tokenize
+// it: measured on the 40 captured tools, adding it moved the server's prompt
+// count by 0 tokens and this estimate by about 600, enough to refuse a request
+// the server accepts. The schema sent is not changed.
+func fmWithoutOrder(schema any) any {
+	switch s := schema.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(s))
+		for k, v := range s {
+			if k != "x-order" {
+				out[k] = fmWithoutOrder(v)
+			}
+		}
+		return out
+	case []any:
+		out := make([]any, len(s))
+		for i, v := range s {
+			out[i] = fmWithoutOrder(v)
+		}
+		return out
+	}
+	return schema
 }
 
 // fmJSONString encodes v, returning "" when it cannot be encoded — a value that
