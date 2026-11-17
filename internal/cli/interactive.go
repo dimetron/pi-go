@@ -321,6 +321,15 @@ func deferredInit(
 		coreTools = append(coreTools, gTool)
 	}
 
+	// A small-window model gets the compact start (see compactContextWindow).
+	// The parts are replaced along with the tools so the context gauge keeps
+	// measuring what is actually sent.
+	if useCompactProfile(providerName, modelName) {
+		coreTools, mcpToolsets = essentialTools(coreTools), nil
+		instructionParts = compactInstructionParts()
+		instruction = instructionParts.String()
+	}
+
 	// Session logger. Created before the agent so it can capture the agent's
 	// non-fatal diagnostics (e.g. unresolved instruction placeholders) in the
 	// session log instead of leaking them to stderr and corrupting the TUI.

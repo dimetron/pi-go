@@ -896,6 +896,14 @@ func runNonInteractive(
 		coreTools = append(coreTools, gTool)
 	}
 
+	// A small-window model gets the compact start, applied last so it bounds
+	// everything assembled above: memory, palace, LSP and MCP all add
+	// declarations or prompt text the window has no room for.
+	if useCompactProfile(info.Provider, info.Model) {
+		coreTools, allToolsets = essentialTools(coreTools), nil
+		instruction = compactInstructionParts().String()
+	}
+
 	// Session logger. Created before the agent so it can capture the agent's
 	// non-fatal diagnostics (e.g. unresolved instruction placeholders) in the
 	// session log instead of leaking them to stderr. SessionStart is recorded
