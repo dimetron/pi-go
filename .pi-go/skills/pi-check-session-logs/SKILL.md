@@ -64,3 +64,36 @@ HOURS=48 bash .pi-go/skills/pi-check-session-logs/analyze.sh
 Research on each issue using subagent - for each issue with priority, score, if it's going to be implemented or rejected. 
 
 Save the findings in ./specs/issues/001-session-errors/PROMPT.md
+## Session history lookup
+
+When the user asks to check a specific session (e.g. `260809-0249-c53d2-7561f`)
+or review session history, search under **`$HOME/.pi-go/`** — that is the
+session root, not the repo.
+
+Sessions live in `$HOME/.pi-go/sessions/<session-id>/`, one directory per
+session (`sessionsDir()` in `internal/cli/cli.go:766`). Each contains:
+
+- `meta.json` — id, title, model, provider, workDir, timestamps, host info.
+- `events.jsonl` — the full turn/event stream (user + assistant messages).
+- `trajectory.atif.json` — the ATIF trajectory (agent tool-call trace).
+- `branches.json` — session branch state.
+
+Other useful files under `$HOME/.pi-go/`:
+
+- `last-session.json` — metadata of the most recent session start.
+- `history.jsonl` / `history` — command history.
+- `log/` — runtime logs (check here when init or a run fails).
+- `config.json` — default model and settings.
+- `memory/` — semantic memory store.
+
+Useful commands:
+
+```bash
+ls $HOME/.pi-go/sessions/ | grep <session-id>   # confirm a session exists
+cat $HOME/.pi-go/sessions/<session-id>/meta.json
+tail -n 50 $HOME/.pi-go/sessions/<session-id>/events.jsonl
+```
+
+The `session-stats` tool (`internal/tools/session_stats.go`) scans these
+directories for anomalies; it defaults to `$HOME/.pi-go/sessions` and accepts a
+`session_dir` override.

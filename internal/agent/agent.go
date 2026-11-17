@@ -310,6 +310,33 @@ Example shape (tree chars shown literally):
         └── lsp/            Manager, language servers, protocol
 `
 
+// CompactSystemInstruction is the system prompt for models whose context window
+// is too small for SystemInstruction. It keeps the rules that stop a small
+// model doing damage or inventing results, and nothing else: every line here is
+// paid for out of a window that also has to hold the tools and the transcript.
+const CompactSystemInstruction = `You are pi-go, a coding agent. Do what the user asks using the tools, then report the result briefly.
+
+- If the user is only talking, answer without tools.
+- Paths are relative to the working directory, never absolute. Before opening a file, run ls and use the names exactly as it lists them; never guess a file or directory.
+- read shows each line as "<number><tab><text>". The number and tab are not in the file: never copy them into edit or write.
+- Change an existing file with edit. Use write only to create a new file.
+- After a change, run the build or the tests and fix what fails.
+- Never repeat a tool call that already gave you its answer.
+- Never claim a command succeeded without running it. If it failed, say so and show the error.
+- Do not delete files or run destructive git commands unless the user asked for exactly that.
+`
+
+// CompactInstructionParts returns the compact system prompt for cwd: the
+// working directory and CompactSystemInstruction, with no project rules and no
+// skills menu. The directory is stated once, plainly, instead of as the full
+// runtime environment block: a small model given HOME, PWD and an absolute
+// path tends to splice them into paths of its own, and every call then fails.
+func CompactInstructionParts(cwd string) InstructionParts {
+	return InstructionParts{
+		Base: fmt.Sprintf("Working directory: %s\n\n%s", cwd, CompactSystemInstruction),
+	}
+}
+
 // Config holds configuration for creating a new Agent.
 type Config struct {
 	// Model is the LLM provider to use (implements model.LLM).
@@ -1024,11 +1051,25 @@ type contextFile struct {
 // file per directory from the filesystem root down to cwd.
 func discoverContextFiles(cwd, home string) []string {
 	// Walk from cwd up to the filesystem root, nearest directory first.
+	//
+	// A linked worktree usually lives inside its own primary checkout
+	// (<repo>/.worktrees/<name>), so the walk passes two checkouts of one
+	// repository and would load that repository's rules twice — once from the
+	// worktree and once, possibly from a different branch, from the checkout
+	// above it. Once the walk has left the checkout cwd is in, any further
+	// checkout of the same repository is skipped.
 	var found []contextFile
 	dir := filepath.Clean(cwd)
+	repo := ""
 	for {
-		if f, ok := readContextFileIn(dir); ok {
-			found = append(found, f)
+		common := gitCommonDir(dir)
+		if common == "" || common != repo {
+			if f, ok := readContextFileIn(dir); ok {
+				found = append(found, f)
+			}
+		}
+		if repo == "" {
+			repo = common
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
@@ -1056,6 +1097,49 @@ func discoverContextFiles(cwd, home string) []string {
 		contents = append(contents, f.content)
 	}
 	return contents
+}
+
+// gitCommonDir returns the shared git directory of the checkout rooted at dir,
+// or "" when dir is not the root of one. Every checkout of a repository — the
+// primary one and each linked worktree — reports the same path, which is what
+// identifies two directories as the same repository.
+//
+// The primary checkout has a .git directory, which is the answer. A linked
+// worktree has a .git file naming its private git dir, and that directory's
+// commondir file points back at the shared one. A submodule also has a .git
+// file but no commondir, so it reports its own git dir and is never mistaken
+// for the repository that contains it.
+func gitCommonDir(dir string) string {
+	dotGit := filepath.Join(dir, ".git")
+	info, err := os.Lstat(dotGit)
+	if err != nil {
+		return ""
+	}
+	if info.IsDir() {
+		return dotGit
+	}
+	data, err := os.ReadFile(dotGit)
+	if err != nil {
+		return ""
+	}
+	gitDir, ok := strings.CutPrefix(strings.TrimSpace(string(data)), "gitdir:")
+	if !ok {
+		return ""
+	}
+	gitDir = strings.TrimSpace(gitDir)
+	if !filepath.IsAbs(gitDir) {
+		gitDir = filepath.Join(dir, gitDir)
+	}
+	gitDir = filepath.Clean(gitDir)
+	common, err := os.ReadFile(filepath.Join(gitDir, "commondir"))
+	if err != nil {
+		return gitDir
+	}
+	commonDir := strings.TrimSpace(string(common))
+	if !filepath.IsAbs(commonDir) {
+		commonDir = filepath.Join(gitDir, commonDir)
+	}
+	return filepath.Clean(commonDir)
 }
 
 // readContextFileIn returns the first context file found in dir.
