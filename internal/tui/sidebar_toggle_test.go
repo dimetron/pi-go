@@ -227,3 +227,66 @@ func assertFrameWidth(t *testing.T, m *model, width int) {
 		}
 	}
 }
+
+// A click above the frame's first row is not on the sidebar. The terminal can
+// report a coordinate the frame does not cover — scrollback rows above it — and
+// mapping that to a frame row yields a negative index.
+//
+// The collapsed state is the one that matters: the strip's hit test is
+// `row < topSectionRows`, and a negative row satisfies it, so without the guard
+// a click in the scrollback just above a collapsed strip would restore the
+// panel. The expanded test (`row == 0`) happens to reject -1 on its own, which
+// is why this case has to be the collapsed one to prove anything.
+func TestSidebarToggleIgnoresClicksAboveTheFrame(t *testing.T) {
+	m := historyModel(t, "")
+	m.width, m.height = 120, 24
+	m.applyResize()
+	// A short transcript produces a frame shorter than the terminal, which is the
+	// state this test needs: the frame's first row is below row 0.
+	m.chatModel.Messages = append(m.chatModel.Messages, realisticChat()[:3]...)
+	m.sidebarCollapsed = true
+	m.syncPalette()
+	m.View()
+	if top := m.frameTop(); top == 0 {
+		t.Fatal("frameTop = 0; the frame did not start below row 0, so there is no row above it to click")
+	}
+
+	x := m.mainWidth() + 5
+	if m.hitSidebarToggle(x, 0) {
+		t.Error("a click above the frame reported a hit on the collapsed strip")
+	}
+	next, _ := m.handleMouseClick(tea.MouseClickMsg(tea.Mouse{X: x, Y: 0, Button: tea.MouseLeft}))
+	got, ok := next.(*model)
+	if !ok {
+		t.Fatalf("handleMouseClick returned %T, want *model", next)
+	}
+	if !got.sidebarCollapsed {
+		t.Error("a click above the frame restored the sidebar")
+	}
+}
+
+// Collapsing needs the strip's column plus a chat panel still worth reading.
+// Between those two floors there is no room for both, and the panel must stay
+// expanded rather than collapse to a strip that leaves the chat 80 columns.
+func TestSidebarWidthFloorLeavesThePanelExpanded(t *testing.T) {
+	for _, tc := range []struct {
+		width     int
+		collapsed bool
+		want      int
+		why       string
+	}{
+		{80, false, 0, "a frame at the floor has no sidebar at all"},
+		{81, false, SidebarWidth, "one column past the floor, expanded"},
+		{81, true, 0, "collapsing would leave the chat the same 80 columns, so it is refused"},
+		{82, true, SidebarStripWidth, "one more column makes the strip affordable"},
+		{120, true, SidebarStripWidth, "a wide frame takes the strip"},
+	} {
+		m := historyModel(t, "")
+		m.width, m.height = tc.width, 30
+		m.sidebarCollapsed = tc.collapsed
+		if got := m.sidebarWidth(); got != tc.want {
+			t.Errorf("width=%d collapsed=%v: sidebarWidth = %d, want %d — %s",
+				tc.width, tc.collapsed, got, tc.want, tc.why)
+		}
+	}
+}
