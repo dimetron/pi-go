@@ -148,7 +148,10 @@ func TestUpdateWindowSizeClampsScrollAndInvalidatesWidth(t *testing.T) {
 	// The panel's content is one column narrower than the panel; the rail (the
 	// minimap, doubling as the divider) owns that column. The status bar spans
 	// the full terminal width (it sits below the sidebar, not beside it).
-	wantChat := 60 - railWidth
+	// At 60 columns the small-screen rule collapses the sidebar to its strip, so
+	// the chat is the terminal minus that column minus the rail. The status bar
+	// spans the full width — it sits below the sidebar, not beside it.
+	wantChat := 60 - SidebarStripWidth - railWidth
 	if mm.chatModel.Width != wantChat {
 		t.Fatalf("expected chat width %d after resize, got %d", wantChat, mm.chatModel.Width)
 	}

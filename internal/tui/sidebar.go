@@ -37,10 +37,36 @@ import (
 // column check — so the whole frame follows from it.
 const SidebarWidth = 28
 
+// Small-screen thresholds. The sidebar auto-collapses to its strip below them
+// rather than being hidden outright, so the chat gets the columns back while the
+// restore control stays on screen.
+const (
+	// SidebarAutoCollapseWidth is where a frame becomes too narrow to spend
+	// SidebarWidth columns on labels: the chat keeps this many columns when the
+	// sidebar is expanded, so below it the expanded panel is the thing that is
+	// unaffordable.
+	//
+	// There is no separate floor for *showing* the sidebar. The strip is one
+	// column, which every frame that can draw a chat can afford, so the sidebar
+	// is never absent — only wide or narrow. A floor here would reintroduce the
+	// one-way trip this rule exists to remove.
+	SidebarAutoCollapseWidth = 100
+	// SidebarAutoCollapseAspect is the width:height ratio below which a frame is
+	// portrait. A tall, narrow window — `pi serve` in a phone browser — is the
+	// mobile case: a column of short labels costs a quarter of the width and the
+	// chat is the only thing being read.
+	SidebarAutoCollapseAspect = 1 // width must be at least this many times the height
+)
+
 // SidebarStripWidth is the width of the collapsed sidebar: one column, the
 // restore glyph alone. Collapsing hands SidebarWidth-1 columns back to the chat
 // while leaving something to click, so the panel can be brought back with the
 // mouse rather than only by its key.
+//
+// A collapsed sidebar is never removed entirely. The strip sits inside the rail
+// column the chat already has, so it costs the frame nothing to keep — and a
+// sidebar that vanished with no control left behind would be a one-way trip on a
+// terminal no key could undo.
 const SidebarStripWidth = 1
 
 // Sidebar collapse glyphs.
