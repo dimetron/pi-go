@@ -149,11 +149,17 @@ type model struct {
 	// before the full-width status bar. The rail and sidebar only cover these rows.
 	topSectionRowsVal int
 	// sidebarCollapsed is the user's choice to put the sidebar away, set by
-	// clicking the collapse glyph on its version row. It is a preference, not a
-	// layout fact: sidebarVisible still drops the sidebar on a frame too narrow
-	// for it, and restoring the preference does not force it back on such a
-	// frame.
+	// clicking the collapse glyph. It is a preference, not a layout fact — the
+	// frame being too small overrides it in the other direction, and clearing it
+	// does not force the panel back onto a frame that cannot afford it.
 	sidebarCollapsed bool
+	// sidebarExpanded records that the user asked for the expanded panel on a
+	// frame the small-screen rule would collapse. It is scoped to that frame:
+	// the rule is otherwise a pure function of width and height, so a resize
+	// that leaves the frame small would immediately re-collapse an expanded
+	// panel, and the toggle would appear to do nothing. Resizing clears it, which
+	// is the moment the user is asking for the layout to be decided again.
+	sidebarExpanded bool
 	// The selectable rows: the message viewport, half-open. Everything else in
 	// the panel is chrome — the matrix rain, the rules, the status bar, the
 	// prompt — and selecting it yields nothing anyone wants on their clipboard.
@@ -1126,6 +1132,9 @@ func (m *model) handleMatrixTick() (tea.Model, tea.Cmd, bool) {
 func (m *model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd, bool) {
 	m.resizeAt = time.Now()
 	m.width, m.height = msg.Width, msg.Height
+	// A resize is the user asking for the layout to be decided again, so it
+	// clears any per-frame override of the small-screen rule.
+	m.sidebarExpanded = false
 	m.applyResize()
 
 	return m, resizeDrainDoneCmd(m.resizeAt), true
@@ -1311,12 +1320,22 @@ func (m *model) handleMouseClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 	// whole panel once it is collapsed.
 	if m.hitSidebarToggle(mouse.X, mouse.Y) {
 		m.sel = selection{}
-		m.sidebarCollapsed = !m.sidebarCollapsed
+		// Toggle the state the user can see, not the preference flag. On a small
+		// frame the strip is on screen because the rule collapsed it, with
+		// sidebarCollapsed still false — flipping only the flag there would leave
+		// the strip up and the control apparently dead.
+		expanded := m.sidebarWidth() == SidebarWidth
+		m.sidebarCollapsed = expanded
+		// Collapsing needs no override: it is what both inputs already want on a
+		// small frame, and it is the user's own choice on a large one. Expanding
+		// does need one, or the rule would collapse the panel again on the very
+		// next render and the click would have done nothing.
+		m.sidebarExpanded = !expanded
 		// The chat viewport's width changes with the sidebar, so re-render the
 		// message wrap now rather than leaving the transcript wrapped for the old
 		// panel until the next resize.
 		m.applyResize()
-		if m.sidebarCollapsed {
+		if expanded {
 			return m, m.setFlash("Sidebar hidden — click " + sidebarRestoreGlyph + " to restore")
 		}
 		return m, m.setFlash("Sidebar shown")
@@ -2561,22 +2580,46 @@ func isResizeTextFragment(msg tea.KeyPressMsg) bool {
 	return msg.Key().Text != ""
 }
 
-// sidebarWidth returns how many columns the sidebar column occupies this frame:
-// SidebarWidth expanded, SidebarStripWidth collapsed, 0 when it is not drawn at
-// all (a narrow terminal, or one with no column to spare for the strip).
+// sidebarFits reports whether the frame can afford the expanded sidebar.
 //
-// Collapsing needs the strip's own column plus a chat panel still worth reading;
-// below that there is not a column to spare for the control that would restore
-// the panel, so asking to collapse on such a frame simply leaves it as it was.
-func (m *model) sidebarWidth() int {
-	if m.width <= 80 {
-		return 0
+// Two ways it cannot. Width: the expanded panel costs SidebarWidth columns, and
+// below SidebarAutoCollapseWidth the chat is the thing that becomes unreadable.
+// Shape: a portrait frame (width < height * SidebarAutoCollapseAspect) is the
+// mobile case — `pi serve` in a phone browser — where a column of short labels
+// costs a quarter of the width and the chat is the only thing being read.
+//
+// An unsized frame (height == 0, before the first WindowSizeMsg and in tests
+// that only set a width) is neither narrow nor portrait: it is simply unknown,
+// and guessing "collapsed" there would make the first frame differ from every
+// frame after it.
+func (m *model) sidebarFits() bool {
+	if m.width < SidebarAutoCollapseWidth {
+		return false
 	}
-	if m.sidebarCollapsed {
-		if m.width-SidebarStripWidth > 80 {
-			return SidebarStripWidth
-		}
-		return 0
+	if m.height > 0 && m.width < m.height*SidebarAutoCollapseAspect {
+		return false
+	}
+	return true
+}
+
+// sidebarWidth returns how many columns the sidebar column occupies this frame:
+// SidebarWidth expanded, SidebarStripWidth collapsed. It is never 0 — the strip
+// is one column, so every frame that draws a chat can seat it, and a sidebar
+// that vanished would take its own restore control with it.
+//
+// This is the single place the sidebar's width is decided, and it reads only
+// frame state — never a cached copy of "the rule ran already". A frame that has
+// not been through handleWindowSize (a test, or a first render before the size
+// message arrives) therefore still lays out correctly, which a stored flag
+// could not guarantee: it would be one edit away from going stale, and a stale
+// one shows the expanded panel on a phone.
+//
+// Two inputs, both about this frame: sidebarCollapsed is the user's toggle, and
+// sidebarFits is the small-screen rule. sidebarExpanded carries the user
+// overruling that rule for this frame after a click.
+func (m *model) sidebarWidth() int {
+	if m.sidebarCollapsed || (!m.sidebarExpanded && !m.sidebarFits()) {
+		return SidebarStripWidth
 	}
 	return SidebarWidth
 }

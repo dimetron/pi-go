@@ -759,9 +759,11 @@ func TestMainWidth_Wide(t *testing.T) {
 }
 
 func TestMainWidth_Narrow(t *testing.T) {
+	// A narrow frame collapses the sidebar to its one-column strip rather than
+	// deleting it, so the chat gets everything but that column.
 	m := &model{width: 60}
-	if got := m.mainWidth(); got != 60 {
-		t.Errorf("expected 60, got %d", got)
+	if got, want := m.mainWidth(), 60-SidebarStripWidth; got != want {
+		t.Errorf("expected %d, got %d", want, got)
 	}
 }
 

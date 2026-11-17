@@ -168,26 +168,29 @@ func TestCollapsedSidebarKeepsTheFrameIntact(t *testing.T) {
 // A frame too narrow to hold the sidebar at all has nowhere to collapse to, so
 // there is no strip and no restore control. Clicking where the sidebar would
 // have been must not toggle anything or index past the frame.
-func TestNoSidebarStripOnANarrowFrame(t *testing.T) {
+func TestNarrowFrameKeepsTheStripAndCanToggle(t *testing.T) {
 	m := historyModel(t, "")
 	m.width, m.height = 70, 30
 	m.applyResize()
-	m.sidebarCollapsed = true
-	m.applyResize()
 
-	if got := m.sidebarWidth(); got != 0 {
-		t.Fatalf("sidebarWidth = %d on a 70-column frame, want 0", got)
+	// The rule -- not the user -- collapses it, so the preference flag stays off.
+	if got := m.sidebarWidth(); got != SidebarStripWidth {
+		t.Fatalf("sidebarWidth = %d on a 70-column frame, want the strip", got)
 	}
-	if m.hitSidebarToggle(69, 0) {
-		t.Error("the toggle reported a hit on a frame with no sidebar")
+	if m.sidebarCollapsed {
+		t.Error("the auto rule set the user's collapse preference")
 	}
-	next, _ := m.handleMouseClick(tea.MouseClickMsg(tea.Mouse{X: 69, Y: 0, Button: tea.MouseLeft}))
-	m, ok := next.(*model)
+
+	m.syncPalette()
+	m.View() // lay out the strip so the hit test has coordinates
+	// The strip is at the right edge, so the restore click lands on it.
+	next, _ := m.handleMouseClick(tea.MouseClickMsg(tea.Mouse{X: 69, Y: m.frameTop(), Button: tea.MouseLeft}))
+	got, ok := next.(*model)
 	if !ok {
 		t.Fatalf("handleMouseClick returned %T, want *model", next)
 	}
-	if !m.sidebarCollapsed {
-		t.Error("a click on a frame with no sidebar changed the collapse preference")
+	if w := got.sidebarWidth(); w != SidebarWidth {
+		t.Errorf("sidebarWidth = %d after clicking the strip on a narrow frame, want %d", w, SidebarWidth)
 	}
 }
 
@@ -268,25 +271,30 @@ func TestSidebarToggleIgnoresClicksAboveTheFrame(t *testing.T) {
 // Collapsing needs the strip's column plus a chat panel still worth reading.
 // Between those two floors there is no room for both, and the panel must stay
 // expanded rather than collapse to a strip that leaves the chat 80 columns.
-func TestSidebarWidthFloorLeavesThePanelExpanded(t *testing.T) {
+func TestSidebarWidthFollowsTheSmallScreenRule(t *testing.T) {
 	for _, tc := range []struct {
-		width     int
-		collapsed bool
-		want      int
-		why       string
+		width, height int
+		collapsed     bool
+		expanded      bool
+		want          int
+		why           string
 	}{
-		{80, false, 0, "a frame at the floor has no sidebar at all"},
-		{81, false, SidebarWidth, "one column past the floor, expanded"},
-		{81, true, 0, "collapsing would leave the chat the same 80 columns, so it is refused"},
-		{82, true, SidebarStripWidth, "one more column makes the strip affordable"},
-		{120, true, SidebarStripWidth, "a wide frame takes the strip"},
+		{60, 30, false, false, SidebarStripWidth, "below the width threshold the rule collapses it"},
+		{SidebarAutoCollapseWidth - 1, 30, false, false, SidebarStripWidth, "still below the threshold"},
+		{SidebarAutoCollapseWidth, 30, false, false, SidebarWidth, "at the threshold the panel fits"},
+		{160, 160, false, false, SidebarWidth, "a square is not portrait"},
+		{200, 60, false, false, SidebarWidth, "wide landscape keeps the panel"},
+		{200, 60, true, false, SidebarStripWidth, "a user's collapse wins over a roomy frame"},
+		{60, 30, false, true, SidebarWidth, "a click overrides the rule for this frame"},
+		{60, 30, true, true, SidebarStripWidth, "an explicit collapse still wins over the override"},
 	} {
-		m := historyModel(t, "")
-		m.width, m.height = tc.width, 30
-		m.sidebarCollapsed = tc.collapsed
+		m := &model{
+			width: tc.width, height: tc.height,
+			sidebarCollapsed: tc.collapsed, sidebarExpanded: tc.expanded,
+		}
 		if got := m.sidebarWidth(); got != tc.want {
-			t.Errorf("width=%d collapsed=%v: sidebarWidth = %d, want %d — %s",
-				tc.width, tc.collapsed, got, tc.want, tc.why)
+			t.Errorf("w=%d h=%d collapsed=%v expanded=%v: sidebarWidth = %d, want %d — %s",
+				tc.width, tc.height, tc.collapsed, tc.expanded, got, tc.want, tc.why)
 		}
 	}
 }
