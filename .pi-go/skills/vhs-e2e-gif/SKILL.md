@@ -1,6 +1,6 @@
 ---
 name: vhs-e2e-gif
-description: Record a test run, a TUI session, or any terminal command as a GIF with VHS and attach it to a GitHub PR as a release-hosted asset, never a repo commit. Use when asked to record an e2e run, demo a fix on a PR, attach a GIF or screen recording to a pull request, show a test passing visually, or produce a terminal recording of pi-go. Encodes the sandbox trap that makes VHS segfault on the first attempt.
+description: Record a test run, a TUI session, or any terminal command as a GIF with VHS and attach it to a GitHub PR as a release-hosted asset, never a repo commit. Use when asked to record or demo a run on a PR. Encodes the sandbox trap that makes VHS segfault.
 ---
 
 # Recording an e2e run as a GIF on a PR

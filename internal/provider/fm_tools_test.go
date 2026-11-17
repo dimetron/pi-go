@@ -181,7 +181,8 @@ func TestFMSanitizeSchemaFixesArraysAndObjects(t *testing.T) {
 
 // TestFMSanitizeSchemaPreservesValidSchema guards the other direction: a schema
 // fm already accepted must come back unchanged, so the rewrite cannot quietly
-// loosen constraints that were working.
+// loosen constraints that were working. The one addition is "x-order", which
+// only orders generation.
 func TestFMSanitizeSchemaPreservesValidSchema(t *testing.T) {
 	raw := `{"type":"object","properties":{
 		"file_path":{"type":"string"},
@@ -192,7 +193,8 @@ func TestFMSanitizeSchemaPreservesValidSchema(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &schema); err != nil {
 		t.Fatal(err)
 	}
-	got := fmSanitizeSchema(schema)
+	got := fmSanitizeSchema(schema).(map[string]any)
+	delete(got, "x-order")
 
 	before, _ := json.Marshal(schema)
 	after, _ := json.Marshal(got)
@@ -230,6 +232,40 @@ func TestFMSanitizeSchemaHandlesLists(t *testing.T) {
 	}
 }
 
+// TestFMSanitizeSchemaKeepsParametersNamedLikeKeywords pins the defect that made
+// fm unable to call find: the "pattern" keyword is dropped, and so was find's
+// required parameter of the same name, because property names were filtered as
+// if they were keywords. The model was never told the parameter existed and
+// every call failed with "pattern is required".
+func TestFMSanitizeSchemaKeepsParametersNamedLikeKeywords(t *testing.T) {
+	raw := `{"type":"object","properties":{
+		"pattern":{"type":"string","pattern":"^.+$"},
+		"path":{"type":"string"},
+		"not":{"type":"boolean"}},
+		"required":["pattern"]}`
+	var schema any
+	if err := json.Unmarshal([]byte(raw), &schema); err != nil {
+		t.Fatal(err)
+	}
+	got := fmSanitizeSchema(schema).(map[string]any)
+
+	props := got["properties"].(map[string]any)
+	for _, name := range []string{"pattern", "path", "not"} {
+		if _, ok := props[name]; !ok {
+			t.Errorf("parameter %q was dropped; props = %v", name, props)
+		}
+	}
+	if _, ok := props["pattern"].(map[string]any)["pattern"]; ok {
+		t.Error(`the "pattern" keyword inside the parameter survived; fm rejects it`)
+	}
+	if !slices.Equal(got["required"].([]any), []any{"pattern"}) {
+		t.Errorf("required = %v, want [pattern]", got["required"])
+	}
+	if want := []any{"pattern", "not", "path"}; !slices.Equal(got["x-order"].([]any), want) {
+		t.Errorf("x-order = %v, want %v (required first, then by name)", got["x-order"], want)
+	}
+}
+
 // TestFMPrepareRequestSanitizesEveryTool runs pi's real 40 tools through the
 // function the model actually calls and asserts that not one rejected keyword
 // survives, and that no tool is dropped.
@@ -249,7 +285,9 @@ func TestFMPrepareRequestSanitizesEveryTool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, bad := range []string{`"$ref"`, `"$defs"`, `"oneOf"`, `"allOf"`, `"pattern"`, `"anyOf"`, `"default":null`} {
+	// The pattern keyword carries a string; a parameter named "pattern" (find,
+	// ripgrep) carries a schema object and must survive.
+	for _, bad := range []string{`"$ref"`, `"$defs"`, `"oneOf"`, `"allOf"`, `"pattern":"`, `"anyOf"`, `"default":null`} {
 		if strings.Contains(string(body), bad) {
 			t.Errorf("%s survived fmPrepareRequest; fm rejects the whole request for it", bad)
 		}
@@ -257,6 +295,20 @@ func TestFMPrepareRequestSanitizesEveryTool(t *testing.T) {
 	// A union type serializes as an array of type names; none may remain.
 	if strings.Contains(string(body), `"type":["`) {
 		t.Error(`a union "type" survived fmPrepareRequest; fm rejects it`)
+	}
+
+	// A tool's parameters must survive with it: find and ripgrep both take a
+	// required "pattern", which the keyword filter used to delete.
+	for _, tl := range req.Config.Tools {
+		for _, fd := range tl.FunctionDeclarations {
+			if fd.Name != "find" && fd.Name != "ripgrep" {
+				continue
+			}
+			params := fd.ParametersJsonSchema.(map[string]any)
+			if _, ok := params["properties"].(map[string]any)["pattern"]; !ok {
+				t.Errorf("%s lost its pattern parameter", fd.Name)
+			}
+		}
 	}
 
 	// No tool may be dropped: a tool the model is never offered is a capability
