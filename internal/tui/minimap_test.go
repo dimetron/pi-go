@@ -320,7 +320,11 @@ func isRule(plain string) bool {
 
 // isBlankRow reports whether a row carries nothing but the rail.
 func isBlankRow(plain string) bool {
-	return strings.TrimSpace(strings.Trim(plain, railGlyph+railThumb)) == ""
+	// The rail and the collapsed sidebar's strip are chrome, not content: a gap
+	// row beside them is still a gap. Space and chrome are trimmed together
+	// rather than in sequence — trimming whitespace first leaves the padding that
+	// precedes the rail behind once the rail itself is removed.
+	return strings.Trim(plain, " \t"+railGlyph+railThumb+railFoot+sidebarRestoreGlyph) == ""
 }
 
 // The message block must sit inset by the same number of rows from the header
