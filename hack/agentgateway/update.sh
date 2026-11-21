@@ -129,7 +129,7 @@ base-costs.json
 if command -v docker >/dev/null 2>&1; then
   echo "Validating ${SRC}/config.yaml"
   if ! docker run --rm -v "${SRC}:/etc/agentgateway:ro" -w /etc/agentgateway \
-       ghcr.io/agentgateway/agentgateway:v1.5.0 --validate-only -f config.yaml >/tmp/agw-validate.$$ 2>&1; then
+       ghcr.io/agentgateway/agentgateway:v1.7.0 --validate-only -f config.yaml >/tmp/agw-validate.$$ 2>&1; then
     echo "config.yaml does not validate — refusing to copy:" >&2
     sed 's/^/  /' /tmp/agw-validate.$$ >&2
     rm -f /tmp/agw-validate.$$
@@ -268,7 +268,7 @@ echo
 # truncated or mangled write is caught even though the source parsed.
 if command -v docker >/dev/null 2>&1; then
   if docker run --rm -v "${DEST}:/etc/agentgateway:ro" -w /etc/agentgateway \
-       ghcr.io/agentgateway/agentgateway:v1.5.0 --validate-only -f config.yaml >/tmp/agw-dest.$$ 2>&1; then
+       ghcr.io/agentgateway/agentgateway:v1.7.0 --validate-only -f config.yaml >/tmp/agw-dest.$$ 2>&1; then
     echo "Deployed config.yaml validates."
   else
     echo "WARNING: the config now on disk does NOT validate:" >&2

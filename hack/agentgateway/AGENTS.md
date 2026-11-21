@@ -221,7 +221,7 @@ Validate first — it parses the config without binding ports:
 
 ```bash
 docker run --rm -v "$PWD:/etc/agentgateway:ro" -w /etc/agentgateway \
-  ghcr.io/agentgateway/agentgateway:v1.5.0 --validate-only -f config.yaml
+  ghcr.io/agentgateway/agentgateway:v1.7.0 --validate-only -f config.yaml
 ```
 
 Then restart and exercise the route end to end. Editing `config.yaml` alone is
