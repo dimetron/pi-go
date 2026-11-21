@@ -83,6 +83,35 @@ func (v View) String() string {
 	return s
 }
 
+// mask hides retractions that happened after an as-of bound. The selection
+// predicate already excludes a statement retracted at or before the view's
+// transaction, but the row still carries the t_ret and ret_kind of the
+// retraction that came later — so Live() and Triple.Status would describe the
+// present instead of the view's instant. As-of rows are reported with no
+// retraction, exactly as Tiramemsu's read::row_to_triple does
+// (t_ret: if mask_retraction { None } ...). A now view needs no masking
+// (everything it selects is live) and the history view must keep the
+// retraction, which is the whole point of it.
+func (v View) mask(sts []Statement) []Statement {
+	if v.mode != viewAsOf {
+		return sts
+	}
+	for i := range sts {
+		if sts[i].TRet != nil {
+			sts[i].TRet, sts[i].RetKind, sts[i].RetractedAt = nil, nil, nil
+		}
+	}
+	return sts
+}
+
+// query runs queryStatements and masks the rows for the view. Every read that
+// returns statements under a view goes through here, so a new read cannot
+// forget the mask.
+func (v View) query(ctx context.Context, q querier, where string, args ...any) ([]Statement, error) {
+	sts, err := queryStatements(ctx, q, where, args...)
+	return v.mask(sts), err
+}
+
 // cond is the view's SQL predicate over the kg_stmt columns, prefixed with
 // alias ("" or "x.").
 func (v View) cond(alias string) (string, []any) {
@@ -254,7 +283,7 @@ func (v View) about(ctx context.Context, q querier, entity, direction string) ([
 		return nil, err
 	}
 	args = append(append(args, cargs...), eargs...)
-	return queryStatements(ctx, q, "WHERE "+where+" AND "+cond+ef+" ORDER BY st.t_add, st.eid", args...)
+	return v.query(ctx, q, "WHERE "+where+" AND "+cond+ef+" ORDER BY st.t_add, st.eid", args...)
 }
 
 // Pattern selects statements by any of subject, predicate and object.
@@ -312,7 +341,7 @@ func (v View) match(ctx context.Context, q querier, p Pattern) ([]Statement, err
 	if p.Limit > 0 {
 		clause += fmt.Sprintf(" LIMIT %d", p.Limit)
 	}
-	return queryStatements(ctx, q, clause, args...)
+	return v.query(ctx, q, clause, args...)
 }
 
 // Get returns statement eid whatever its state, or nil when it does not exist.
@@ -332,6 +361,17 @@ func getStatement(ctx context.Context, q querier, eid int64) (*Statement, error)
 		return nil, err
 	}
 	return &sts[0], nil
+}
+
+// lookup is getStatement under a view, so the statement it comes back described
+// as the view sees it: under an as-of view a later retraction is not reported.
+func (v View) lookup(ctx context.Context, q querier, eid int64) (*Statement, error) {
+	st, err := getStatement(ctx, q, eid)
+	if err != nil || st == nil {
+		return st, err
+	}
+	masked := v.mask([]Statement{*st})
+	return &masked[0], nil
 }
 
 // Layers returns the visible statements about statement eid, excluding

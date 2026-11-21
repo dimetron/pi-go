@@ -664,6 +664,64 @@ func TestKGViews(t *testing.T) {
 	}
 }
 
+// TestKGAsOfMasksLaterRetraction pins that an as-of row describes the view's
+// instant, not the present: a statement retracted after the bound is reported
+// with no retraction at all. Without the mask the row is selected correctly but
+// still carries the later t_ret, so Live() and Triple.Status claim the fact was
+// already gone — which is the one question a bitemporal store exists to answer.
+func TestKGAsOfMasksLaterRetraction(t *testing.T) {
+	kg, _ := newEngine(t)
+	ctx := context.Background()
+	e := assert1(t, kg, Ent("alice"), Ent("works_at"), Ent("acme"), Valid{})
+	rep := tx(t, kg, func(w *KGTx) error { _, err := w.Retract(e); return err })
+
+	// The statement was live at t_add..rep.T-1, so every view before the
+	// retraction must show it live.
+	if rep.T < 2 {
+		t.Fatalf("retraction in tx%d, want tx2 or later", rep.T)
+	}
+	at := rep.T - 1
+	sts, err := kg.AsOf(at).About(ctx, "alice", "")
+	if err != nil || len(sts) != 1 {
+		t.Fatalf("AsOf(%d) = %d rows, %v; want 1", at, len(sts), err)
+	}
+	if !sts[0].Live() {
+		t.Errorf("AsOf(%d): e%d reported retracted (t_ret=%d) though the retraction was in tx%d",
+			at, sts[0].EID, *sts[0].TRet, rep.T)
+	}
+	if sts[0].TRet != nil || sts[0].RetKind != nil || sts[0].RetractedAt != nil {
+		t.Errorf("AsOf(%d): retraction fields = %v/%v/%v, want all nil",
+			at, sts[0].TRet, sts[0].RetKind, sts[0].RetractedAt)
+	}
+
+	// The same through Match, Explain and the legacy Triple facade, since every
+	// one of them is a separate path to the same row.
+	if sts, err := kg.AsOf(rep.T-1).Match(ctx, Pattern{Subject: new(Ent("alice"))}); err != nil || len(sts) != 1 || !sts[0].Live() {
+		t.Errorf("AsOf.Match = %+v, %v; want one live row", sts, err)
+	}
+	if ex, err := kg.AsOf(rep.T-1).Explain(ctx, e); err != nil || ex == nil {
+		t.Fatalf("Explain: %v", err)
+	} else if !ex.Statement.Live() {
+		t.Errorf("Explain statement reported retracted under as-of: %+v", ex.Statement)
+	}
+	trips, err := kg.QueryWith(ctx, KGQuery{Entity: "alice", TxAsOf: "tx1"})
+	if err != nil || len(trips) != 1 {
+		t.Fatalf("QueryWith tx1 = %d rows, %v; want 1", len(trips), err)
+	}
+	if got := trips[0].Status; got != "active" {
+		t.Errorf("--tx-as-of tx1 status = %q, want \"active\" (the fact was live at tx1)", got)
+	}
+
+	// History and Now keep their own meaning: history must still report the
+	// retraction, and now must not report the statement at all.
+	if got, _ := kg.History().About(ctx, "alice", ""); len(got) != 1 || got[0].Live() {
+		t.Errorf("History = %+v; want one retracted row", got)
+	}
+	if got, _ := kg.Now().About(ctx, "alice", ""); len(got) != 0 {
+		t.Errorf("Now = %+v; want nothing", got)
+	}
+}
+
 func TestKGConflicts(t *testing.T) {
 	kg, _ := newEngine(t)
 	ctx := context.Background()
