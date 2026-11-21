@@ -48,16 +48,33 @@ type Entity struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// Triple is a subject-predicate-object fact in the knowledge graph.
+// Triple is a subject-predicate-object fact in the knowledge graph, in the
+// shape the palace API has always returned. It is a view of one statement.
 type Triple struct {
-	ID          string     `json:"id"`
-	SubjectID   string     `json:"subject_id"`
-	PredicateID string     `json:"predicate_id"`
-	ObjectID    string     `json:"object_id"`
-	ValidFrom   *time.Time `json:"valid_from,omitempty"`
-	ValidTo     *time.Time `json:"valid_to,omitempty"`
-	SourceFile  string     `json:"source_file,omitempty"`
-	ExtractedAt time.Time  `json:"extracted_at"`
+	// ID is "e<EID>".
+	ID          string `json:"id"`
+	EID         int64  `json:"eid"`
+	SubjectID   string `json:"subject_id"`
+	PredicateID string `json:"predicate_id"`
+	ObjectID    string `json:"object_id"`
+	// ObjectKind is empty for an entity object, else "string", "number", ...
+	ObjectKind string     `json:"object_kind,omitempty"`
+	ValidFrom  *time.Time `json:"valid_from,omitempty"`
+	ValidTo    *time.Time `json:"valid_to,omitempty"`
+	SourceFile string     `json:"source_file,omitempty"`
+	// ExtractedAt is when the fact was learned: the legacy extraction time
+	// for imported triples, otherwise the writing transaction's time.
+	ExtractedAt   time.Time `json:"extracted_at"`
+	TAdd          int64     `json:"t_add"`
+	Confidence    *float64  `json:"confidence,omitempty"`
+	Sources       []string  `json:"sources,omitempty"`
+	Confirmations int       `json:"confirmations,omitempty"`
+	// Status is "active", "ended", "superseded", "retracted", "cascade" or
+	// "replaced"; SupersededBy names the correction of a superseded fact.
+	Status       string `json:"status"`
+	SupersededBy int64  `json:"superseded_by,omitempty"`
+	// New is set by Add when the fact was written rather than already known.
+	New bool `json:"new,omitempty"`
 }
 
 // TripleInput is the input for creating a new triple.
@@ -66,6 +83,27 @@ type TripleInput struct {
 	Predicate string
 	Object    string
 	ValidFrom *time.Time
+	ValidTo   *time.Time
+	// Literal stores Object as a string value instead of an entity.
+	Literal bool
+	// About annotates statement About instead of the Subject entity.
+	About int64
+	// Support derives the fact from these statements: it is retracted when
+	// any of them is retracted or corrected.
+	Support []int64
+	// Confidence (0-1), Source and SourceFile become layers on the fact.
+	Confidence *float64
+	Source     string
+	SourceFile string
+	// ConfirmExisting confirms an identical fact that already exists.
+	ConfirmExisting bool
+	// Author and Session are recorded on the transaction.
+	Author  string
+	Session string
+}
+
+func (in TripleInput) txOptions() TxOptions {
+	return TxOptions{Author: in.Author, Source: in.Session}
 }
 
 // DiaryEntry is a journal entry written by an agent.
@@ -147,10 +185,18 @@ type PalaceStatus struct {
 
 // KGStats are aggregate statistics for the knowledge graph.
 type KGStats struct {
-	EntityCount   int      `json:"entity_count"`
-	TripleCount   int      `json:"triple_count"`
-	ActiveTriples int      `json:"active_triples"`
-	Predicates    []string `json:"predicates,omitempty"`
+	EntityCount int `json:"entity_count"`
+	// TripleCount is the live facts; ActiveTriples those whose valid time
+	// is still open.
+	TripleCount   int `json:"triple_count"`
+	ActiveTriples int `json:"active_triples"`
+	// Statements counts every statement ever written, Layers the live
+	// statements about statements, Retracted the retracted ones.
+	Statements   int      `json:"statements"`
+	Layers       int      `json:"layers"`
+	Retracted    int      `json:"retracted"`
+	Transactions int      `json:"transactions"`
+	Predicates   []string `json:"predicates,omitempty"`
 }
 
 // ScoredResult is a drawer ID paired with a similarity score, used for ranking.

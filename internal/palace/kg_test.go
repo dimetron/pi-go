@@ -379,11 +379,15 @@ func TestKG_InvalidatedTriple_StillInTimeline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("timeline: %v", err)
 	}
-	if len(timeline) != 1 {
-		t.Fatalf("invalidated triple should still appear in timeline, got %d", len(timeline))
+	// The open version stays (superseded) beside the closed replacement.
+	if len(timeline) != 2 {
+		t.Fatalf("invalidated triple should appear in timeline twice (open, then closed), got %d", len(timeline))
 	}
-	if timeline[0].ValidTo == nil {
-		t.Error("expected valid_to to be set")
+	if timeline[0].ValidTo != nil || timeline[0].Status != "superseded" {
+		t.Errorf("old version = %+v, want open and superseded", timeline[0])
+	}
+	if timeline[1].ValidTo == nil {
+		t.Error("expected valid_to to be set on the replacement")
 	}
 }
 

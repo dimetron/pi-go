@@ -1,6 +1,9 @@
 package palace
 
-import "context"
+import (
+	"context"
+	"database/sql"
+)
 
 // PalaceStore defines the interface for palace persistence operations.
 type PalaceStore interface {
@@ -33,15 +36,14 @@ type PalaceStore interface {
 	// Knowledge graph operations
 	InsertEntity(ctx context.Context, e *Entity) error
 	GetEntity(ctx context.Context, id string) (*Entity, error)
-	InsertTriple(ctx context.Context, t *Triple) error
-	QueryTriples(ctx context.Context, entityID, asOf, direction string) ([]*Triple, error)
-	InvalidateTriple(ctx context.Context, subjectID, predicateID, objectID string) error
-	TimelineTriples(ctx context.Context, entityID string) ([]*Triple, error)
-	KGStats(ctx context.Context) (*KGStats, error)
 
 	// Diary operations
 	InsertDiaryEntry(ctx context.Context, d *DiaryEntry) error
 	ListDiaryEntries(ctx context.Context, agent string, limit int) ([]*DiaryEntry, error)
+
+	// DB is the underlying database; the knowledge graph runs its
+	// transactions on it directly.
+	DB() *sql.DB
 
 	Close() error
 }

@@ -2,6 +2,7 @@ package palace
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,10 +11,17 @@ import (
 	_ "modernc.org/sqlite" // Pure Go SQLite driver
 )
 
+// migration is one schema step: SQL, optionally followed by a Go step run in
+// the same transaction (for data moves the SQL cannot express).
+type migration struct {
+	sql   string
+	apply func(*sql.Tx) error
+}
+
 // migrations is the ordered list of schema migrations.
-var migrations = []string{
+var migrations = []migration{
 	// Version 1: Drawers table with FTS5 and triggers
-	`
+	{sql: `
 	CREATE TABLE IF NOT EXISTS drawers (
 		id           TEXT PRIMARY KEY,
 		wing         TEXT NOT NULL,
@@ -53,10 +61,10 @@ var migrations = []string{
 		INSERT INTO drawers_fts(rowid, content)
 		VALUES (new.rowid, new.content);
 	END;
-	`,
+	`},
 
 	// Version 2: Entities and triples for the knowledge graph
-	`
+	{sql: `
 	CREATE TABLE IF NOT EXISTS entities (
 		id         TEXT PRIMARY KEY,
 		name       TEXT NOT NULL,
@@ -81,10 +89,10 @@ var migrations = []string{
 	CREATE INDEX IF NOT EXISTS idx_triples_object ON triples(object_id);
 	CREATE INDEX IF NOT EXISTS idx_triples_predicate ON triples(predicate_id);
 	CREATE INDEX IF NOT EXISTS idx_triples_valid ON triples(valid_from, valid_to);
-	`,
+	`},
 
 	// Version 3: Diary entries
-	`
+	{sql: `
 	CREATE TABLE IF NOT EXISTS diary_entries (
 		id         INTEGER PRIMARY KEY AUTOINCREMENT,
 		agent      TEXT NOT NULL,
@@ -95,7 +103,7 @@ var migrations = []string{
 	);
 	CREATE INDEX IF NOT EXISTS idx_diary_agent ON diary_entries(agent);
 	CREATE INDEX IF NOT EXISTS idx_diary_created ON diary_entries(created_at_epoch DESC);
-	`,
+	`},
 
 	// Version 4: Content hash, for incremental mining.
 	//
@@ -108,9 +116,9 @@ var migrations = []string{
 	//
 	// Existing rows get '' and are treated as "hash unknown", so the first run
 	// after this migration re-embeds once and records hashes as it goes.
-	`
+	{sql: `
 	ALTER TABLE drawers ADD COLUMN content_hash TEXT NOT NULL DEFAULT '';
-	`,
+	`},
 
 	// Version 5: Index the content hash for exact-duplicate lookups.
 	//
@@ -121,10 +129,14 @@ var migrations = []string{
 	//
 	// Column order matters: (wing, room) first keeps it usable for the same
 	// prefix queries idx_drawers_room serves.
-	`
+	{sql: `
 	CREATE INDEX IF NOT EXISTS idx_drawers_content_hash
 		ON drawers(wing, room, content_hash);
-	`,
+	`},
+
+	// Version 6: the bitemporal statement graph (kg_*), ported from Tiramemsu,
+	// and the one-time import of the legacy triples table. See kg_schema.go.
+	{sql: kgSchemaSQL, apply: importLegacyTriples},
 }
 
 // OpenDB opens (or creates) a palace SQLite database at the given path with
@@ -137,22 +149,14 @@ func OpenDB(dbPath string) (*sql.DB, error) {
 		}
 	}
 
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := sql.Open("sqlite", dbPath+"?"+connPragmas)
 	if err != nil {
 		return nil, fmt.Errorf("palace: open db: %w", err)
 	}
-
-	pragmas := []string{
-		"PRAGMA journal_mode=WAL",
-		"PRAGMA foreign_keys=ON",
-		"PRAGMA busy_timeout=5000",
-		"PRAGMA mmap_size=268435456", // 256MB
-	}
-	for _, p := range pragmas {
-		if _, err := db.Exec(p); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("palace: %s: %w", p, err)
-		}
+	if dbPath == ":memory:" {
+		// Every connection to ":memory:" opens its own empty database, so a
+		// pool of more than one would scatter the schema across connections.
+		db.SetMaxOpenConns(1)
 	}
 
 	if err := migrate(db); err != nil {
@@ -162,6 +166,19 @@ func OpenDB(dbPath string) (*sql.DB, error) {
 
 	return db, nil
 }
+
+// connPragmas configures every pooled connection, not just the first. Busy
+// handlers and foreign-key enforcement are per connection in SQLite, so
+// running PRAGMA statements once through *sql.DB leaves later connections
+// without them; the modernc driver applies _pragma DSN parameters on each
+// connect.
+const connPragmas = "_pragma=journal_mode(WAL)" +
+	"&_pragma=foreign_keys(1)" +
+	"&_pragma=busy_timeout(5000)" +
+	"&_pragma=mmap_size(268435456)" // 256MB
+
+// errSchemaTooNew is returned when the database was migrated by a newer pi.
+var errSchemaTooNew = errors.New("palace: database schema is newer than this pi; upgrade pi")
 
 // migrate creates the schema_versions table and applies pending migrations.
 func migrate(db *sql.DB) error {
@@ -179,29 +196,51 @@ func migrate(db *sql.DB) error {
 	if err := row.Scan(&current); err != nil {
 		return fmt.Errorf("read schema version: %w", err)
 	}
+	if current > len(migrations) {
+		return fmt.Errorf("%w (database %d, known %d)", errSchemaTooNew, current, len(migrations))
+	}
 
 	for i := current; i < len(migrations); i++ {
-		version := i + 1
-		tx, err := db.Begin()
-		if err != nil {
-			return fmt.Errorf("begin migration %d: %w", version, err)
+		if err := applyMigration(db, i+1, migrations[i]); err != nil {
+			return err
 		}
-		if _, err := tx.Exec(migrations[i]); err != nil {
+	}
+	return nil
+}
+
+// applyMigration runs one migration in its own transaction. The version row
+// is written first: that write takes SQLite's write lock, so a second process
+// migrating the same file waits, then finds the version taken and skips it
+// instead of applying the step twice.
+func applyMigration(db *sql.DB, version int, m migration) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin migration %d: %w", version, err)
+	}
+	res, err := tx.Exec(
+		"INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)",
+		version, time.Now().UTC().Format(time.RFC3339),
+	)
+	if err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("record migration %d: %w", version, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return tx.Rollback() // applied concurrently by another process
+	}
+	if _, err := tx.Exec(m.sql); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("apply migration %d: %w", version, err)
+	}
+	if m.apply != nil {
+		if err := m.apply(tx); err != nil {
 			_ = tx.Rollback()
 			return fmt.Errorf("apply migration %d: %w", version, err)
 		}
-		if _, err := tx.Exec(
-			"INSERT INTO schema_versions (version, applied_at) VALUES (?, ?)",
-			version, time.Now().UTC().Format(time.RFC3339),
-		); err != nil {
-			_ = tx.Rollback()
-			return fmt.Errorf("record migration %d: %w", version, err)
-		}
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit migration %d: %w", version, err)
-		}
 	}
-
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit migration %d: %w", version, err)
+	}
 	return nil
 }
 

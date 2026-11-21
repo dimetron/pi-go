@@ -4,7 +4,10 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 
 	"github.com/dimetron/pi-go/internal/palace"
 )
@@ -17,7 +20,7 @@ func TestMemoryKGCmd_SubcommandsRegistered(t *testing.T) {
 		subcommands[sub.Name()] = true
 	}
 
-	for _, name := range []string{"query", "add", "timeline"} {
+	for _, name := range []string{"query", "add", "timeline", "explain", "conflicts", "log"} {
 		if !subcommands[name] {
 			t.Errorf("missing subcommand %q", name)
 		}
@@ -348,6 +351,74 @@ func TestTruncate_TableDriven(t *testing.T) {
 			got := truncate(tt.s, tt.n)
 			if got != tt.want {
 				t.Errorf("truncate(%q, %d) = %q, want %q", tt.s, tt.n, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMemoryKG_ExplainConflictsLogTxAsOf(t *testing.T) {
+	resetGlobalFlags(t)
+	dbPath := filepath.Join(t.TempDir(), "palace.db")
+	if err := runMemoryKGAdd("project", "database", "postgres", dbPath, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := runMemoryKGAdd("project", "database", "sqlite", dbPath, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	out := captureStdout(t, func() {
+		if err := runMemoryKGExplain(1, dbPath, ""); err != nil {
+			t.Errorf("explain: %v", err)
+		}
+	})
+	if !strings.Contains(out, "## e1: project → database → postgres") {
+		t.Errorf("explain output:\n%s", out)
+	}
+	out = captureStdout(t, func() {
+		if err := runMemoryKGConflicts(dbPath, "project", ""); err != nil {
+			t.Errorf("conflicts: %v", err)
+		}
+	})
+	if !strings.Contains(out, "postgres: e1") || !strings.Contains(out, "sqlite: e2") {
+		t.Errorf("conflicts output:\n%s", out)
+	}
+	out = captureStdout(t, func() {
+		if err := runMemoryKGLog(dbPath, 0); err != nil {
+			t.Errorf("log: %v", err)
+		}
+	})
+	if !strings.Contains(out, "tx1") || !strings.Contains(out, "+ e2  project → database → sqlite") {
+		t.Errorf("log output:\n%s", out)
+	}
+	out = captureStdout(t, func() {
+		if err := runMemoryKGQueryAt("project", dbPath, "", "1", ""); err != nil {
+			t.Errorf("query --tx-as-of: %v", err)
+		}
+	})
+	if !strings.Contains(out, "postgres") || strings.Contains(out, "sqlite") {
+		t.Errorf("tx-as-of 1 should show only postgres:\n%s", out)
+	}
+	if err := runMemoryKGExplain(99, dbPath, ""); err == nil {
+		t.Error("explain of a missing statement succeeded")
+	}
+	if _, err := parseEID("e0"); err == nil {
+		t.Error("parseEID accepted e0")
+	}
+	if eid, err := parseEID("e12"); err != nil || eid != 12 {
+		t.Errorf("parseEID(e12) = %d, %v", eid, err)
+	}
+	cmd := newMemoryKGExplainCmd()
+	cmd.SetArgs([]string{"e1", "--db", dbPath})
+	_ = captureStdout(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Errorf("explain cmd: %v", err)
+		}
+	})
+	for _, c := range []*cobra.Command{newMemoryKGConflictsCmd(), newMemoryKGLogCmd()} {
+		c.SetArgs([]string{"--db", dbPath})
+		_ = captureStdout(t, func() {
+			if err := c.Execute(); err != nil {
+				t.Errorf("%s cmd: %v", c.Name(), err)
 			}
 		})
 	}
