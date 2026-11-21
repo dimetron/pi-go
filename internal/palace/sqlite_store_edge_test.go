@@ -239,50 +239,50 @@ func TestStoreKnowledgeGraphEdges(t *testing.T) {
 		}
 	})
 
+	kg := NewKnowledgeGraph(store)
 	validFrom := now.Add(-time.Hour)
-	triples := []*Triple{
-		{ID: "t1", SubjectID: "alice", PredicateID: "works_on", ObjectID: "auth", ValidFrom: &validFrom, ExtractedAt: now},
-		{ID: "t2", SubjectID: "auth", PredicateID: "owned_by", ObjectID: "alice", ExtractedAt: now},
-	}
-	for _, tr := range triples {
-		if err := store.InsertTriple(ctx, tr); err != nil {
-			t.Fatalf("InsertTriple(%s): %v", tr.ID, err)
+	for _, in := range []TripleInput{
+		{Subject: "alice", Predicate: "works_on", Object: "auth", ValidFrom: &validFrom},
+		{Subject: "auth", Predicate: "owned_by", Object: "alice"},
+	} {
+		if _, err := kg.Add(ctx, in); err != nil {
+			t.Fatalf("Add(%s): %v", in.Predicate, err)
 		}
 	}
 
-	t.Run("QueryTriples directions and asOf", func(t *testing.T) {
+	t.Run("Query directions and asOf", func(t *testing.T) {
 		for _, dir := range []string{"subject", "object", "both", ""} {
-			got, err := store.QueryTriples(ctx, "alice", "", dir)
+			got, err := kg.Query(ctx, "alice", "", dir)
 			if err != nil {
-				t.Fatalf("QueryTriples(dir=%q): %v", dir, err)
+				t.Fatalf("Query(dir=%q): %v", dir, err)
 			}
 			if len(got) == 0 {
-				t.Errorf("QueryTriples(dir=%q) returned no triples", dir)
+				t.Errorf("Query(dir=%q) returned no triples", dir)
 			}
 		}
 		asOf := now.Format(time.RFC3339)
-		if _, err := store.QueryTriples(ctx, "alice", asOf, "subject"); err != nil {
-			t.Fatalf("QueryTriples(asOf): %v", err)
+		if _, err := kg.Query(ctx, "alice", asOf, "subject"); err != nil {
+			t.Fatalf("Query(asOf): %v", err)
 		}
 	})
 
-	t.Run("TimelineTriples", func(t *testing.T) {
-		got, err := store.TimelineTriples(ctx, "alice")
+	t.Run("Timeline", func(t *testing.T) {
+		got, err := kg.Timeline(ctx, "alice")
 		if err != nil {
-			t.Fatalf("TimelineTriples: %v", err)
+			t.Fatalf("Timeline: %v", err)
 		}
 		if len(got) != 2 {
-			t.Errorf("TimelineTriples = %d, want 2", len(got))
+			t.Errorf("Timeline = %d, want 2", len(got))
 		}
 	})
 
-	t.Run("InvalidateTriple then KGStats", func(t *testing.T) {
-		if err := store.InvalidateTriple(ctx, "alice", "works_on", "auth"); err != nil {
-			t.Fatalf("InvalidateTriple: %v", err)
+	t.Run("Invalidate then Stats", func(t *testing.T) {
+		if err := kg.Invalidate(ctx, "alice", "works_on", "auth"); err != nil {
+			t.Fatalf("Invalidate: %v", err)
 		}
-		stats, err := store.KGStats(ctx)
+		stats, err := kg.Stats(ctx)
 		if err != nil {
-			t.Fatalf("KGStats: %v", err)
+			t.Fatalf("Stats: %v", err)
 		}
 		if stats.EntityCount != 2 {
 			t.Errorf("EntityCount = %d, want 2", stats.EntityCount)
@@ -292,6 +292,9 @@ func TestStoreKnowledgeGraphEdges(t *testing.T) {
 		}
 		if stats.ActiveTriples != 1 {
 			t.Errorf("ActiveTriples = %d, want 1 after invalidation", stats.ActiveTriples)
+		}
+		if stats.Retracted != 1 || stats.Statements != 4 {
+			t.Errorf("Retracted/Statements = %d/%d, want 1/4 (old version + supersedes link)", stats.Retracted, stats.Statements)
 		}
 		if len(stats.Predicates) == 0 {
 			t.Error("expected at least one predicate in stats")

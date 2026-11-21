@@ -58,6 +58,12 @@ specs/
 |-------------|---------------|-------------------------------------------|
 | claude-mem/ | idea..summary | Native claude-mem implementation in pi-go |
 
+### memory/
+
+| Spec        | Phases        | Description                                                                 |
+|-------------|---------------|-----------------------------------------------------------------------------|
+| tiramemsu/  | idea..summary | Port Tiramemsu's bitemporal statement graph into the palace KG (pure Go)    |
+
 ### features/SOP (Standard Operating Procedures)
 
 | Spec                   | Phases        | Description                                       |

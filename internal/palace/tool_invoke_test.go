@@ -2,6 +2,7 @@ package palace
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -126,6 +127,13 @@ func TestPalaceToolsRunEndToEnd(t *testing.T) {
 		{"palace-kg-query", map[string]any{"entity": "Alice"}},
 		{"palace-kg-timeline", map[string]any{"entity": "Alice"}},
 		{"palace-kg-invalidate", map[string]any{"subject": "Alice", "predicate": "works_on", "object": "auth"}},
+		// Alternative inputs: no subject (about) and no entity (text) must pass
+		// the inferred schema, not only the handler.
+		{"palace-kg-add", map[string]any{"about": 2, "predicate": "note", "object": "seen in review", "literal": true}},
+		{"palace-kg-query", map[string]any{"text": "review"}},
+		{"palace-kg-revise", map[string]any{"action": "confirm", "eid": 2}},
+		{"palace-kg-explain", map[string]any{"eid": 1}},
+		{"palace-kg-conflicts", map[string]any{}},
 		{"palace-diary-write", map[string]any{"agent_name": "tester", "entry": "today I tested tools", "topic": "testing"}},
 		{"palace-diary-read", map[string]any{"agent_name": "tester"}},
 		{"palace-search", map[string]any{"query": "JWT"}},
@@ -153,8 +161,12 @@ func TestPalaceToolsRunEndToEnd(t *testing.T) {
 			t.Errorf("%s Run error: %v", a.name, runErr)
 			continue
 		}
-		if _, ok := out["content"]; !ok {
+		content, ok := out["content"].(string)
+		if !ok {
 			t.Errorf("%s output missing content field: %#v", a.name, out)
+		}
+		if strings.HasPrefix(content, "Error") {
+			t.Errorf("%s(%v) = %s", a.name, a.in, content)
 		}
 	}
 }

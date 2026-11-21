@@ -191,7 +191,7 @@ func (p *Palace) KGQuery(ctx context.Context, entity, asOf, direction string) ([
 	return p.kg.Query(ctx, entity, asOf, direction)
 }
 
-// KGInvalidate sets valid_to on an active triple.
+// KGInvalidate ends an active fact now (a supersede with valid_to = now).
 func (p *Palace) KGInvalidate(ctx context.Context, subject, predicate, object string) error {
 	return p.kg.Invalidate(ctx, subject, predicate, object)
 }
@@ -205,6 +205,10 @@ func (p *Palace) KGTimeline(ctx context.Context, entity string) ([]*Triple, erro
 func (p *Palace) KGStats(ctx context.Context) (*KGStats, error) {
 	return p.kg.Stats(ctx)
 }
+
+// KG returns the knowledge graph, for transactions and views beyond the
+// triple-shaped methods above.
+func (p *Palace) KG() *KnowledgeGraph { return p.kg }
 
 // --- Memory Layers ---
 

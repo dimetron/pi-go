@@ -398,27 +398,15 @@ func TestEntityCRUD(t *testing.T) {
 
 func TestTripleCRUD(t *testing.T) {
 	store := newTestStore(t)
+	kg := NewKnowledgeGraph(store)
 	ctx := context.Background()
 
-	now := time.Now().UTC()
-	_ = store.InsertEntity(ctx, &Entity{ID: "alice", Name: "Alice", CreatedAt: now})
-	_ = store.InsertEntity(ctx, &Entity{ID: "auth", Name: "auth-migration", CreatedAt: now})
-
-	triple := &Triple{
-		ID:          "t1",
-		SubjectID:   "alice",
-		PredicateID: "works_on",
-		ObjectID:    "auth",
-		ExtractedAt: now,
+	if _, err := kg.Add(ctx, TripleInput{Subject: "alice", Predicate: "works_on", Object: "auth"}); err != nil {
+		t.Fatalf("Add: %v", err)
 	}
-	if err := store.InsertTriple(ctx, triple); err != nil {
-		t.Fatalf("InsertTriple: %v", err)
-	}
-
-	// Query by subject
-	triples, err := store.QueryTriples(ctx, "alice", "", "")
+	triples, err := kg.Query(ctx, "alice", "", "")
 	if err != nil {
-		t.Fatalf("QueryTriples: %v", err)
+		t.Fatalf("Query: %v", err)
 	}
 	if len(triples) != 1 {
 		t.Fatalf("triples = %d, want 1", len(triples))
@@ -430,50 +418,42 @@ func TestTripleCRUD(t *testing.T) {
 
 func TestTripleInvalidation(t *testing.T) {
 	store := newTestStore(t)
+	kg := NewKnowledgeGraph(store)
 	ctx := context.Background()
 
-	now := time.Now().UTC()
-	_ = store.InsertEntity(ctx, &Entity{ID: "alice", Name: "Alice", CreatedAt: now})
-	_ = store.InsertEntity(ctx, &Entity{ID: "auth", Name: "auth", CreatedAt: now})
-
-	triple := &Triple{
-		ID:          "t1",
-		SubjectID:   "alice",
-		PredicateID: "works_on",
-		ObjectID:    "auth",
-		ExtractedAt: now,
+	if _, err := kg.Add(ctx, TripleInput{Subject: "alice", Predicate: "works_on", Object: "auth"}); err != nil {
+		t.Fatalf("Add: %v", err)
 	}
-	_ = store.InsertTriple(ctx, triple)
-
-	if err := store.InvalidateTriple(ctx, "alice", "works_on", "auth"); err != nil {
-		t.Fatalf("InvalidateTriple: %v", err)
+	if err := kg.Invalidate(ctx, "alice", "works_on", "auth"); err != nil {
+		t.Fatalf("Invalidate: %v", err)
 	}
 
-	// Should still be in timeline
-	timeline, err := store.TimelineTriples(ctx, "alice")
+	// The open version is superseded by a closed one; both stay in the timeline.
+	timeline, err := kg.Timeline(ctx, "alice")
 	if err != nil {
-		t.Fatalf("TimelineTriples: %v", err)
+		t.Fatalf("Timeline: %v", err)
 	}
-	if len(timeline) != 1 {
-		t.Fatalf("timeline = %d, want 1", len(timeline))
+	if len(timeline) != 2 {
+		t.Fatalf("timeline = %d, want 2", len(timeline))
 	}
-	if timeline[0].ValidTo == nil {
+	if timeline[0].Status != "superseded" || timeline[0].SupersededBy != timeline[1].EID {
+		t.Errorf("old version = %+v, want superseded by e%d", timeline[0], timeline[1].EID)
+	}
+	if timeline[1].ValidTo == nil {
 		t.Error("expected valid_to to be set after invalidation")
 	}
 }
 
 func TestKGStats(t *testing.T) {
 	store := newTestStore(t)
+	kg := NewKnowledgeGraph(store)
 	ctx := context.Background()
 
-	now := time.Now().UTC()
-	_ = store.InsertEntity(ctx, &Entity{ID: "alice", Name: "Alice", CreatedAt: now})
-	_ = store.InsertEntity(ctx, &Entity{ID: "auth", Name: "auth", CreatedAt: now})
-	_ = store.InsertTriple(ctx, &Triple{
-		ID: "t1", SubjectID: "alice", PredicateID: "works_on", ObjectID: "auth", ExtractedAt: now,
-	})
+	if _, err := kg.Add(ctx, TripleInput{Subject: "alice", Predicate: "works_on", Object: "auth"}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
 
-	stats, err := store.KGStats(ctx)
+	stats, err := kg.Stats(ctx)
 	if err != nil {
 		t.Fatalf("KGStats: %v", err)
 	}

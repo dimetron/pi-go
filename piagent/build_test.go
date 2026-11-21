@@ -2,6 +2,7 @@ package piagent
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -327,9 +328,10 @@ func (s stubPalaceStore) CountDrawers(context.Context) (int, error) { return s.d
 func (s stubPalaceStore) ListWings(context.Context) ([]palace.WingSummary, error) {
 	return nil, nil
 }
-func (s stubPalaceStore) KGStats(context.Context) (*palace.KGStats, error) {
-	return &palace.KGStats{}, nil
-}
+
+// DB reports no database: the knowledge graph then fails its stats query,
+// which Status treats as a warning.
+func (s stubPalaceStore) DB() *sql.DB { return nil }
 
 func TestPalaceHasContent(t *testing.T) {
 	tests := []struct {

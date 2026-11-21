@@ -397,13 +397,16 @@ func TestPalace_KGInvalidate(t *testing.T) {
 		}
 	}
 
-	// Timeline still shows it.
+	// Timeline shows the open version, superseded, and the closed one.
 	timeline, err := p.KGTimeline(ctx, "Bob")
 	if err != nil {
 		t.Fatalf("KGTimeline: %v", err)
 	}
-	if len(timeline) != 1 {
-		t.Errorf("timeline = %d, want 1", len(timeline))
+	if len(timeline) != 2 {
+		t.Fatalf("timeline = %d, want 2", len(timeline))
+	}
+	if timeline[0].Status != "superseded" || timeline[1].Status != "ended" {
+		t.Errorf("statuses = %s, %s; want superseded, ended", timeline[0].Status, timeline[1].Status)
 	}
 }
 

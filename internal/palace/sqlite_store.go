@@ -22,6 +22,9 @@ func NewSQLitePalaceStore(db *sql.DB) *SQLitePalaceStore {
 	return &SQLitePalaceStore{db: db}
 }
 
+// DB returns the underlying database.
+func (s *SQLitePalaceStore) DB() *sql.DB { return s.db }
+
 // GenerateDrawerID creates a deterministic drawer ID from wing, room, and content identity.
 func GenerateDrawerID(wing, room, sourceFile string, chunkIndex int, content string) string {
 	var key string
@@ -565,117 +568,6 @@ func (s *SQLitePalaceStore) GetEntity(ctx context.Context, id string) (*Entity, 
 	return &e, nil
 }
 
-// InsertTriple inserts a new triple record.
-func (s *SQLitePalaceStore) InsertTriple(ctx context.Context, t *Triple) error {
-	var validFrom, validTo sql.NullString
-	if t.ValidFrom != nil {
-		validFrom = sql.NullString{String: t.ValidFrom.UTC().Format(time.RFC3339), Valid: true}
-	}
-	if t.ValidTo != nil {
-		validTo = sql.NullString{String: t.ValidTo.UTC().Format(time.RFC3339), Valid: true}
-	}
-
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO triples (id, subject_id, predicate_id, object_id, valid_from, valid_to, source_file, extracted_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		t.ID, t.SubjectID, t.PredicateID, t.ObjectID,
-		validFrom, validTo, t.SourceFile,
-		t.ExtractedAt.UTC().Format(time.RFC3339))
-	if err != nil {
-		return fmt.Errorf("palace: insert triple: %w", err)
-	}
-	return nil
-}
-
-// QueryTriples returns triples involving the entity, optionally filtered by time.
-func (s *SQLitePalaceStore) QueryTriples(ctx context.Context, entityID, asOf, direction string) ([]*Triple, error) {
-	query := "SELECT id, subject_id, predicate_id, object_id, valid_from, valid_to, source_file, extracted_at FROM triples WHERE "
-	var args []any
-
-	switch direction {
-	case "subject":
-		query += "subject_id = ?"
-		args = append(args, entityID)
-	case "object":
-		query += "object_id = ?"
-		args = append(args, entityID)
-	default: // "both" or empty
-		query += "(subject_id = ? OR object_id = ?)"
-		args = append(args, entityID, entityID)
-	}
-
-	if asOf != "" {
-		query += " AND (valid_from IS NULL OR valid_from <= ?) AND (valid_to IS NULL OR valid_to >= ?)"
-		args = append(args, asOf, asOf)
-	}
-
-	query += " ORDER BY extracted_at DESC"
-
-	rows, err := s.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("palace: query triples: %w", err)
-	}
-	defer rows.Close()
-
-	return scanTriples(rows)
-}
-
-// InvalidateTriple sets valid_to = now() on matching active triples.
-func (s *SQLitePalaceStore) InvalidateTriple(ctx context.Context, subjectID, predicateID, objectID string) error {
-	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := s.db.ExecContext(ctx,
-		"UPDATE triples SET valid_to = ? WHERE subject_id = ? AND predicate_id = ? AND object_id = ? AND valid_to IS NULL",
-		now, subjectID, predicateID, objectID)
-	if err != nil {
-		return fmt.Errorf("palace: invalidate triple: %w", err)
-	}
-	return nil
-}
-
-// TimelineTriples returns all triples for an entity ordered by extracted_at.
-func (s *SQLitePalaceStore) TimelineTriples(ctx context.Context, entityID string) ([]*Triple, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, subject_id, predicate_id, object_id, valid_from, valid_to, source_file, extracted_at
-		 FROM triples WHERE subject_id = ? OR object_id = ? ORDER BY extracted_at ASC`,
-		entityID, entityID)
-	if err != nil {
-		return nil, fmt.Errorf("palace: timeline triples: %w", err)
-	}
-	defer rows.Close()
-
-	return scanTriples(rows)
-}
-
-// KGStats returns aggregate statistics about the knowledge graph.
-func (s *SQLitePalaceStore) KGStats(ctx context.Context) (*KGStats, error) {
-	stats := &KGStats{}
-
-	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM entities").Scan(&stats.EntityCount); err != nil {
-		return nil, fmt.Errorf("palace: kg stats entities: %w", err)
-	}
-	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM triples").Scan(&stats.TripleCount); err != nil {
-		return nil, fmt.Errorf("palace: kg stats triples: %w", err)
-	}
-	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM triples WHERE valid_to IS NULL").Scan(&stats.ActiveTriples); err != nil {
-		return nil, fmt.Errorf("palace: kg stats active: %w", err)
-	}
-
-	rows, err := s.db.QueryContext(ctx, "SELECT DISTINCT predicate_id FROM triples ORDER BY predicate_id")
-	if err != nil {
-		return nil, fmt.Errorf("palace: kg stats predicates: %w", err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var p string
-		if err := rows.Scan(&p); err != nil {
-			return nil, fmt.Errorf("palace: scan predicate: %w", err)
-		}
-		stats.Predicates = append(stats.Predicates, p)
-	}
-	return stats, rows.Err()
-}
-
 // InsertDiaryEntry inserts a new diary entry.
 func (s *SQLitePalaceStore) InsertDiaryEntry(ctx context.Context, d *DiaryEntry) error {
 	result, err := s.db.ExecContext(ctx,
@@ -764,31 +656,4 @@ func scanDrawers(rows *sql.Rows) ([]*Drawer, error) {
 		drawers = append(drawers, d)
 	}
 	return drawers, rows.Err()
-}
-
-// scanTriples scans triple rows from a query result.
-func scanTriples(rows *sql.Rows) ([]*Triple, error) {
-	var triples []*Triple
-	for rows.Next() {
-		t := &Triple{}
-		var validFrom, validTo sql.NullString
-		var extractedAt string
-		if err := rows.Scan(
-			&t.ID, &t.SubjectID, &t.PredicateID, &t.ObjectID,
-			&validFrom, &validTo, &t.SourceFile, &extractedAt,
-		); err != nil {
-			return nil, fmt.Errorf("palace: scan triple: %w", err)
-		}
-		t.ExtractedAt, _ = time.Parse(time.RFC3339, extractedAt)
-		if validFrom.Valid {
-			parsed, _ := time.Parse(time.RFC3339, validFrom.String)
-			t.ValidFrom = &parsed
-		}
-		if validTo.Valid {
-			parsed, _ := time.Parse(time.RFC3339, validTo.String)
-			t.ValidTo = &parsed
-		}
-		triples = append(triples, t)
-	}
-	return triples, rows.Err()
 }
