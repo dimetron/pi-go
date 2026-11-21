@@ -1,0 +1,306 @@
+name: Refresh model list
+
+# Weekly regeneration of the embedded model catalogs and price snapshots, opened
+# as a pull request. Without this the catalogs rot silently: a provider ships a
+# model, the checked-in fallback keeps serving the old list, and nobody notices
+# until a user picks a model the binary does not know.
+#
+# Modelled on agentgateway's .github/workflows/model-catalog.yml, with the two
+# differences pi-go's data forces:
+#
+#   - The per-provider catalogs come from each provider's own listing API
+#     (`make fetch-models`), not from models.dev, so the job needs one key per
+#     provider. `scripts/fetch-models.sh` skips a provider whose key is empty
+#     and still exits 0, which is how models-anthropic.json and
+#     models-openai.json both went missing from the tree while the other four
+#     were committed and nothing failed. The key check below turns that silent
+#     skip into a failed job.
+#
+#   - The commit is created through the Git database API instead of `git push`.
+#     main enforces required_signatures, and every pushed commit here is signed
+#     by a local SSH key the runner does not have — so a pushed automation
+#     commit could never be merged. The API creates the commit as the GitHub
+#     Actions bot, which GitHub signs itself, producing the same verified
+#     web-flow signature as a pull request merged through the web UI.
+#
+#     Two conditions make that work, both easy to break:
+#       * GH_TOKEN must stay the default `github.token`. Signing is supported
+#         only for bot-generated tokens; substituting a personal access token
+#         (or an app secret that is really one) still creates and pushes the
+#         commit, but it comes back `unsigned` under the token owner's name and
+#         can never be merged. Verified against this repository: an API commit
+#         created with a PAT returned verification.verified=false.
+#       * The commit payload must not carry an author or committer. Supplying
+#         either drops the signature.
+
+on:
+  schedule:
+    # Monday 08:17 UTC. Every fetch script pins its fetched_at to the fetch date
+    # at midnight UTC, so any two runs inside one UTC day write identical bytes
+    # and a re-run after a failure is idempotent.
+    - cron: '17 8 * * 1'
+  workflow_dispatch: {}
+
+permissions: {}
+
+concurrency:
+  group: refresh-model-list
+  # Queue rather than cancel: a half-finished catalog commit is worse than a
+  # late one, and the fetch is cheap.
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    name: Refresh model list
+    # A fork has none of these keys and cannot push the branch, so the job only
+    # means anything in the canonical repository.
+    if: github.repository == 'dimetron/pi-go'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write # Push the automation branch.
+      pull-requests: write # Open or update the pull request.
+    env:
+      # Read by the CLI's config.APIKeys() through scripts/fetch-models.sh and
+      # hack/modelsdoc. A provider with no secret is skipped by the script, so
+      # the step below fails first rather than shipping a half-refreshed tree.
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+      XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # No credentials: the commit goes through the API, and leaving a token
+          # in .git/config would let a later step push an unsigned commit.
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          # The fetch is one build plus a handful of HTTP requests per week; a
+          # cached module tree and build dir would save seconds and add the
+          # cache-save failure mode.
+          cache: false
+
+      # The shell scripts degrade silently on a missing tool: fetch-models.sh
+      # only normalizes (sort, dedupe, pinned fetched_at) when jq is present, so
+      # a run without it would still write catalogs but could produce a diff on
+      # unchanged data every week. Fail here instead of guessing.
+      - name: Check required secrets and tools
+        shell: bash
+        run: |
+          missing=()
+          for v in ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY \
+                   MISTRAL_API_KEY XAI_API_KEY OPENROUTER_API_KEY; do
+            [ -n "${!v:-}" ] || missing+=("$v")
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "missing repository secrets: ${missing[*]}" >&2
+            echo "add them with: gh secret set <NAME> --repo $GITHUB_REPOSITORY" >&2
+            echo "each secret holds that provider's API key, used only to list models" >&2
+            exit 1
+          fi
+          for tool in jq python3 make git; do
+            command -v "$tool" > /dev/null || { echo "missing required tool: $tool" >&2; exit 1; }
+          done
+
+      - name: Refresh catalogs
+        # The three scripts write disjoint files: per-provider catalogs, the
+        # models.dev price snapshot, and the scraped Ollama Cloud price table.
+        # Each one stages its output and only replaces the committed file when
+        # the fetch validated, so a provider outage leaves that file alone.
+        run: make fetch-models fetch-modelsdev-pricing fetch-ollama-pricing
+
+      - name: Regenerate MODELS.md
+        # Reads the catalogs the step above just wrote, so it must run after
+        # them. A provider that failed to fetch keeps the section MODELS.md
+        # already had rather than deleting it.
+        run: make generate-models-md
+
+      - name: Check for changes
+        id: changes
+        shell: bash
+        run: |
+          # Every generator stamps the run date (fetched_at in the JSON files,
+          # "Last updated" in MODELS.md). Comparing raw bytes would therefore
+          # report a change every single week and open a pull request whose only
+          # diff is a date. Strip the timestamps from both sides first, exactly
+          # as the agentgateway workflow drops its generatedAt field.
+          #
+          # The kind is passed in rather than derived from the path inside the
+          # function: the old side of the comparison arrives on stdin, so a
+          # function that dispatches on its argument would see /dev/stdin and
+          # run the text transform on JSON.
+          strip_ts() { # $1 = json|text, stdin -> stdout
+            case "$1" in
+              json) jq -S 'del(.fetched_at)' ;;
+              text) sed -E 's/^Last updated: .*/Last updated: <date>/' ;;
+            esac
+          }
+
+          changed=false
+          while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            kind=text
+            case "$f" in *.json) kind=json ;; esac
+            if strip_ts "$kind" < "$f" | cmp --silent - <(git show "HEAD:$f" | strip_ts "$kind"); then
+              continue
+            fi
+            echo "changed: $f"
+            changed=true
+          done < <(git diff --name-only)
+
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+
+      - name: Validate changes
+        if: steps.changes.outputs.changed == 'true'
+        shell: bash
+        # Cleared so this gate matches `go test ./internal/provider` in ci.yml,
+        # where no provider key exists. Several non-e2e tests there skip
+        # themselves on a missing key — TestNewLLMWithProvider and
+        # TestNewGemini (internal/provider/provider_test.go) — and build real
+        # clients when one is present. Inheriting the job-level keys would make
+        # the same gate mean two different things.
+        env:
+          ANTHROPIC_API_KEY: ''
+          OPENAI_API_KEY: ''
+          GEMINI_API_KEY: ''
+          MISTRAL_API_KEY: ''
+          XAI_API_KEY: ''
+          OPENROUTER_API_KEY: ''
+        run: |
+          # The refresh may touch the generated data and nothing else. A change
+          # anywhere else means one of the scripts wrote outside its contract.
+          unexpected="$(git diff --name-only | grep -vE \
+            '^(internal/provider/modeldata/models-[a-z]+\.json|internal/provider/modeldata/[a-z-]*pricing\.json|MODELS\.md)$' || true)"
+          if [ -n "$unexpected" ]; then
+            echo "refresh changed unexpected files:" >&2
+            echo "$unexpected" >&2
+            exit 1
+          fi
+
+          # internal/provider guards the catalogs themselves — every provider
+          # present, valid JSON, no empty id, no duplicate, sorted by id — and
+          # hack/modelsdoc guards the document. Together they fail a refresh
+          # that lost a provider or produced unsorted, duplicated output.
+          go test ./internal/provider ./hack/modelsdoc
+
+      - name: Generate pull request description
+        if: steps.changes.outputs.changed == 'true'
+        shell: bash
+        run: |
+          body="$RUNNER_TEMP/model-list-pr.md"
+          # No backticks in the summary: they would sit inside a single-quoted
+          # string, which shellcheck flags (SC2016) as a failed expansion.
+          summary='Automated weekly refresh of the embedded model catalogs and price snapshots under internal/provider/modeldata/, and of MODELS.md, from the live provider APIs and models.dev.
+
+          A provider that was unreachable, or answered with an empty model list, kept the file it already had — review the diff for a provider that looks stale.'
+          {
+            echo "$summary"
+            echo
+            echo '```'
+            git diff --stat
+            echo '```'
+            echo
+            echo '<details><summary>Full diff</summary>'
+            echo
+            echo '```diff'
+            git diff
+            echo '```'
+            echo
+            echo '</details>'
+          } > "$body"
+          # GitHub rejects a body over 65536 characters, and modelsdev-pricing.json
+          # alone is ~100 KiB of pretty-printed JSON.
+          if [ "$(wc -c < "$body")" -gt 65536 ]; then
+            {
+              echo "$summary"
+              echo
+              echo 'The diff exceeds the pull request description limit. See the **Files changed** tab.'
+            } > "$body"
+          fi
+
+      - name: Commit and open or update pull request
+        if: steps.changes.outputs.changed == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BRANCH: automation/refresh-model-list
+          BASE: main
+        run: |
+          set -euo pipefail
+
+          base_sha="$(git rev-parse HEAD)"
+
+          # One blob per changed file, addressed by content, so the tree below
+          # differs from the base tree only in these paths. --no-renames keeps
+          # a rename from arriving as a three-field line; it becomes a delete
+          # plus an add, which the loop already understands.
+          entries='[]'
+          while IFS=$'\t' read -r status f; do
+            [ -n "$f" ] || continue
+            if [ "$status" = 'D' ]; then
+              # A tree entry whose sha is null deletes the path. The scripts do
+              # not remove files today, and the guard above would let a dropped
+              # provider through, so handle it rather than dying on a jq read of
+              # a file that is no longer there.
+              entries="$(jq -c --arg p "$f" \
+                '. + [{path: $p, mode: "100644", type: "blob", sha: null}]' <<< "$entries")"
+              continue
+            fi
+            blob="$(jq -Rs '{content: ., encoding: "utf-8"}' "$f" \
+              | gh api --method POST "repos/$GH_REPO/git/blobs" --input - --jq .sha)"
+            entries="$(jq -c --arg p "$f" --arg s "$blob" \
+              '. + [{path: $p, mode: "100644", type: "blob", sha: $s}]' <<< "$entries")"
+          done < <(git diff --name-status --no-renames)
+
+          base_tree="$(gh api "repos/$GH_REPO/git/commits/$base_sha" --jq .tree.sha)"
+          new_tree="$(jq -n -c --arg base "$base_tree" --argjson entries "$entries" \
+            '{base_tree: $base, tree: $entries}' \
+            | gh api --method POST "repos/$GH_REPO/git/trees" --input - --jq .sha)"
+          # Creating the commit as the token's own identity (no author or
+          # committer override) is what makes GitHub sign it. Supplying either
+          # one would drop the signature and the commit would be unmergeable.
+          #
+          # The trailer is not decoration: .githooks/pre-push hard-fails any
+          # commit without a Signed-off-by naming its committer, because
+          # AGENTS.md mandates `git commit -s -S`. The bot is its own committer,
+          # so it signs off as itself.
+          new_commit="$(jq -n -c \
+            --arg msg "Refresh model list
+
+          Regenerated the embedded model catalogs and MODELS.md from the live
+          provider APIs and models.dev.
+
+          Signed-off-by: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>" \
+            --arg tree "$new_tree" --arg parent "$base_sha" \
+            '{message: $msg, tree: $tree, parents: [$parent]}' \
+            | gh api --method POST "repos/$GH_REPO/git/commits" --input - --jq .sha)"
+
+          if gh api "repos/$GH_REPO/git/ref/heads/$BRANCH" > /dev/null 2>&1; then
+            # Force is required, not optional: the branch must stay one commit
+            # on top of current main, and last week's commit has a stale parent.
+            jq -n -c --arg sha "$new_commit" '{sha: $sha, force: true}' \
+              | gh api --method PATCH "repos/$GH_REPO/git/refs/heads/$BRANCH" --input - > /dev/null
+          else
+            jq -n -c --arg sha "$new_commit" --arg ref "refs/heads/$BRANCH" \
+              '{ref: $ref, sha: $sha}' \
+              | gh api --method POST "repos/$GH_REPO/git/refs" --input - > /dev/null
+          fi
+
+          pr="$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')"
+          if [ -z "$pr" ]; then
+            gh pr create \
+              --base "$BASE" \
+              --head "$BRANCH" \
+              --title 'Refresh model list' \
+              --body-file "$RUNNER_TEMP/model-list-pr.md"
+          else
+            # The branch was force-updated, so the PR already shows the new
+            # diff; only its description needs rewriting.
+            gh pr edit "$pr" --body-file "$RUNNER_TEMP/model-list-pr.md"
+          fi
