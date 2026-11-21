@@ -25,6 +25,9 @@ func newMemoryKGCmd() *cobra.Command {
 	cmd.AddCommand(newMemoryKGExplainCmd())
 	cmd.AddCommand(newMemoryKGConflictsCmd())
 	cmd.AddCommand(newMemoryKGLogCmd())
+	cmd.AddCommand(newMemoryKGGraphsCmd())
+	cmd.AddCommand(newMemoryKGSchemaCmd())
+	cmd.AddCommand(newMemoryKGEraseCmd())
 
 	return cmd
 }

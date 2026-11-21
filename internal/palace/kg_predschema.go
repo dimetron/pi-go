@@ -506,3 +506,17 @@ func equalInts(a, b []int64) bool {
 	}
 	return true
 }
+
+// ensureOne makes p cardinality-one while keeping its other schema flags.
+func (w *KGTx) ensureOne(p Value) error {
+	po, _, err := encodeValue(w.ctx, w.q, p, true)
+	if err != nil {
+		return err
+	}
+	sch, _, err := readSchema(w.ctx, w.q, po)
+	if err != nil || sch.One {
+		return err
+	}
+	sch.One = true
+	return w.SetPredicate(p, sch)
+}

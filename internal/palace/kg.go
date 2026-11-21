@@ -88,6 +88,11 @@ func (kg *KnowledgeGraph) Add(ctx context.Context, input TripleInput) (*Triple, 
 				return err
 			}
 		}
+		if input.Graph != "" {
+			if _, _, err := tx.AddToGraph(eid, input.Graph); err != nil {
+				return err
+			}
+		}
 		return annotateEvidence(tx, eid, input.Confidence, input.Source, input.SourceFile)
 	})
 	if err != nil {
@@ -105,7 +110,7 @@ func (kg *KnowledgeGraph) Add(ctx context.Context, input TripleInput) (*Triple, 
 // confidence is cardinality one: a new value replaces the old.
 func annotateEvidence(tx *KGTx, eid int64, confidence *float64, source, sourceFile string) error {
 	if confidence != nil {
-		if err := tx.SetPredicate(Ent(predConfidence), PredicateSchema{One: true}); err != nil {
+		if err := tx.ensureOne(Ent(predConfidence)); err != nil {
 			return err
 		}
 		if _, _, err := tx.Annotate(eid, Ent(predConfidence), Num(*confidence)); err != nil {
@@ -137,6 +142,8 @@ type KGQuery struct {
 	// Direction is "subject", "object" or "" (both).
 	Direction string
 	Limit     int
+	// Graph restricts the facts to one named graph.
+	Graph string
 }
 
 // View resolves the query's transaction-time and valid-time selection.
@@ -180,6 +187,9 @@ func (kg *KnowledgeGraph) QueryWith(ctx context.Context, in KGQuery) ([]*Triple,
 	v, err := kg.View(ctx, in.TxAsOf, in.AsOf)
 	if err != nil {
 		return nil, err
+	}
+	if in.Graph != "" {
+		v = v.InGraph(in.Graph)
 	}
 	var out []*Triple
 	err = kg.read(ctx, func(q querier) error {

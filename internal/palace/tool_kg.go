@@ -52,6 +52,8 @@ type KGAddToolInput struct {
 	Source string `json:"source,omitempty"`
 	// When the fact is already known, record this as a confirmation.
 	ConfirmExisting bool `json:"confirm_existing,omitempty"`
+	// Put the fact into this named graph (a project, session or topic).
+	Graph string `json:"graph,omitempty"`
 }
 
 // KGAddToolOutput contains the result of adding a triple.
@@ -93,6 +95,7 @@ func palaceKGAddHandler(ctx context.Context, p *Palace, input KGAddToolInput) (K
 		Confidence:      input.Confidence,
 		Source:          input.Source,
 		ConfirmExisting: input.ConfirmExisting,
+		Graph:           input.Graph,
 		Author:          author,
 		Session:         session,
 	}
@@ -165,6 +168,8 @@ type KGQueryToolInput struct {
 	Direction string `json:"direction,omitempty"`
 	// Maximum facts to return (default all for entity, 20 for text).
 	Limit int `json:"limit,omitempty"`
+	// Only facts in this named graph.
+	Graph string `json:"graph,omitempty"`
 }
 
 // KGQueryToolOutput contains formatted query results.
