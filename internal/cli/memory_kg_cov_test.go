@@ -235,7 +235,7 @@ func TestMemoryKGCov_Rules(t *testing.T) {
 	badElpi := write("bad.elpi", "reports X Y :- tm.triple X manager Y")
 
 	has(t, k.ok("rules", "store", "org", "--file", dl), "Stored org as e")
-	k.fails("no such file", "rules", "store", "org", "--file", filepath.Join(dir, "missing.dl"))
+	k.fails("missing.dl", "rules", "store", "org", "--file", filepath.Join(dir, "missing.dl")) // OS-neutral: the message names the file on every platform
 
 	out := k.ok("rules", "check", "org")
 	has(t, out, "witnesses")
