@@ -653,3 +653,16 @@ func TestRules_MaterializeBudget(t *testing.T) {
 	_, err = kg.Materialize(cctx, TxOptions{}, "org", kg.Now(), RuleOptions{})
 	mustErr(t, err, context.Canceled)
 }
+
+func TestRules_MaterializeRejectsPastViews(t *testing.T) {
+	kg, _ := newEngine(t)
+	assert1(t, kg, Ent("a"), Ent("manager"), Ent("b"), Valid{})
+	tx(t, kg, func(w *KGTx) error {
+		_, err := w.StoreProgram("r", "datalog", "reports(X, Y) :- manager(X, Y).")
+		return err
+	})
+	for _, v := range []View{kg.AsOf(1), kg.History()} {
+		_, err := kg.Materialize(context.Background(), TxOptions{}, "r", v, RuleOptions{})
+		mustErr(t, err, ErrNotMaterializable)
+	}
+}

@@ -151,6 +151,11 @@ type conclusion struct {
 // that rests on the absence of a statement cannot fall with a premise.
 func (kg *KnowledgeGraph) Materialize(ctx context.Context, opts TxOptions, name string, view View, ro RuleOptions) (*MaterializeReport, error) {
 	view.kg = kg
+	if view.mode != viewNow {
+		// Conclusions rest on live premises; a past or history view would
+		// derive from statements that may no longer be believed.
+		return nil, fmt.Errorf("%w: materialize reads the now view, not %s", ErrNotMaterializable, view)
+	}
 	rep := &MaterializeReport{}
 	tr, err := kg.Transact(ctx, opts, func(w *KGTx) error {
 		prog, peid, err := loadProgramQ(ctx, w.q, name)

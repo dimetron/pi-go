@@ -140,6 +140,7 @@ func TestPalaceToolsRunEndToEnd(t *testing.T) {
 		{"palace-kg-add", map[string]any{"subject": "Billing", "predicate": "depends_on", "object": "Ledger"}},
 		{"palace-kg-path", map[string]any{"from": "Bob", "to": "Ledger", "direction": "out"}},
 		{"palace-kg-recall", map[string]any{"query": "billing"}},
+		{"palace-kg-rules", map[string]any{"action": "solve", "program": "dep(X, Y) :- depends_on(X, Y).", "goal": "dep(X, Y)"}},
 		{"palace-kg-bundle", map[string]any{"action": "export", "eid": 1, "tx_as_of": "1"}},
 		{"palace-kg-graph", map[string]any{"action": "remove", "eid": 2, "graph": "team"}},
 		{"palace-diary-write", map[string]any{"agent_name": "tester", "entry": "today I tested tools", "topic": "testing"}},
