@@ -329,6 +329,29 @@ func (v View) match(ctx context.Context, q querier, p Pattern) ([]Statement, err
 			args = append(args, o)
 			continue
 		}
+		if f.name == "o" && p.Predicate == nil && isLiteralKind(f.val.Kind) {
+			// With the predicate free, a sensitive predicate may hold this
+			// value sealed: take the sealed candidates too and compare them
+			// after decoding.
+			anySealed, err := hasSealedTerms(ctx, q)
+			if err != nil {
+				return nil, err
+			}
+			if anySealed {
+				o, ok, err := encodeValue(ctx, q, *f.val, false)
+				if err != nil {
+					return nil, err
+				}
+				if ok {
+					where = append(where, "(st.o = ? OR (st.o & 15) = 9)")
+					args = append(args, o)
+				} else {
+					where = append(where, "(st.o & 15) = 9")
+				}
+				postFilter = f.val
+				continue
+			}
+		}
 		o, ok, err := encodeValue(ctx, q, *f.val, false)
 		if err != nil || !ok {
 			return nil, err
@@ -644,3 +667,13 @@ func (v View) InGraph(graphs ...string) View {
 
 // Graphs reports the graph restriction of v.
 func (v View) Graphs() []string { return slices.Clone(v.graphs) }
+
+// hasSealedTerms reports whether any sealed value exists.
+func hasSealedTerms(ctx context.Context, q querier) (bool, error) {
+	var n int
+	err := q.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM kg_term WHERE tag = ?)", tagSealed).Scan(&n)
+	if err != nil {
+		return false, fmt.Errorf("palace: kg: sealed terms: %w", err)
+	}
+	return n == 1, nil
+}

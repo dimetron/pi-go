@@ -208,6 +208,9 @@ func (w *KGTx) Erase(subject Value) (bool, error) {
 	if err != nil || !ok {
 		return false, err
 	}
+	if err := w.dropAnswersQuoting(so); err != nil {
+		return false, err
+	}
 	res, err := w.q.ExecContext(w.ctx,
 		"UPDATE kg_seal_key SET key = zeroblob(64), destroyed_t = ? WHERE subject = ? AND destroyed_t IS NULL", w.t, so)
 	if err != nil {
@@ -263,4 +266,47 @@ func (kg *KnowledgeGraph) Erase(ctx context.Context, opts TxOptions, subject str
 	}
 	out.Checkpointed = busy == 0
 	return out, nil
+}
+
+// dropAnswersQuoting deletes the saved answers whose query text contains a
+// sealed value of subject, before its key is destroyed: the query is stored
+// in plain text and would otherwise outlive the erasure.
+func (w *KGTx) dropAnswersQuoting(subject objectID) error {
+	key, found, destroyed, err := readSealKey(w.ctx, w.q, subject)
+	if err != nil || !found || destroyed {
+		return err
+	}
+	rows, err := w.q.QueryContext(w.ctx, "SELECT lex FROM kg_term WHERE tag = ? AND lex LIKE ?",
+		tagSealed, strconv.FormatInt(int64(subject), 10)+":%")
+	if err != nil {
+		return fmt.Errorf("palace: kg: erase: %w", err)
+	}
+	var lexes []string
+	for rows.Next() {
+		var lex string
+		if err := rows.Scan(&lex); err != nil {
+			rows.Close()
+			return err
+		}
+		lexes = append(lexes, lex)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	keys := map[objectID][]byte{subject: key}
+	for _, lex := range lexes {
+		v, err := openSealed(w.ctx, w.q, lex, keys)
+		if err != nil {
+			return err
+		}
+		if v.String() == "" {
+			continue
+		}
+		if _, err := w.q.ExecContext(w.ctx, "DELETE FROM kg_saved_answer WHERE instr(query, ?) > 0", v.String()); err != nil {
+			return fmt.Errorf("palace: kg: erase saved answers: %w", err)
+		}
+	}
+	return nil
 }

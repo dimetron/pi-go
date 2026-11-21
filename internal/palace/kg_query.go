@@ -612,6 +612,10 @@ func (e *evaluator) node(n QNode, in []solution) ([]solution, error) {
 				ents = []Value{}
 			}
 		}
+		// Each binding is an intermediate row: charge it before allocating.
+		if err := e.m.take(len(ents), 0); err != nil {
+			return nil, err
+		}
 		for _, v := range ents {
 			vars := make(map[string]Value, len(s.vars)+1)
 			for k, x := range s.vars {
@@ -642,6 +646,8 @@ func analyze(q *Query) (preds []Value, negative bool) {
 	for _, p := range q.Vars {
 		negative = negative || p.Count
 	}
+	// OFFSET skips rows whose retraction shifts later rows into the answer.
+	negative = negative || q.Offset > 0
 	var walk func(elems []QElem)
 	walk = func(elems []QElem) {
 		for _, el := range elems {
@@ -668,6 +674,13 @@ func analyze(q *Query) (preds []Value, negative bool) {
 				negative = true
 				walk(x.Group)
 			case QGraph:
+				// Membership changes add and remove rows without touching
+				// the facts the query matched.
+				negative = true
+				if !seen[predInGraph] {
+					seen[predInGraph] = true
+					preds = append(preds, sysPred(predInGraph))
+				}
 				walk(x.Group)
 			}
 		}

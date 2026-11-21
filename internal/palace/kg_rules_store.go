@@ -265,6 +265,9 @@ func writeFragment(w *KGTx, pred string, vals []Value, f frag, peid int64, have 
 }
 
 func deriveFragment(w *KGTx, pred string, vals []Value, valid Valid, sup []int64, kept map[int64]bool, rep *MaterializeReport) error {
+	if err := w.checkNoSealedCopy(Ent(pred), vals[1], sup); err != nil {
+		return err
+	}
 	eid, isNew, err := w.Derive(vals[0], Ent(pred), vals[1], valid, sup)
 	if err != nil {
 		return fmt.Errorf("palace: kg: materialize %s(%s, %s): %w", pred, vals[0], vals[1], err)
@@ -333,4 +336,35 @@ func liveConclusions(ctx context.Context, w *KGTx, peid int64) (map[string][]*co
 		out[key] = append(out[key], c)
 	}
 	return out, nil
+}
+
+// checkNoSealedCopy refuses a conclusion that would copy a sensitive value
+// into a predicate that is not sensitive: the copy would be plaintext that
+// erasing the original subject can no longer destroy. A literal conclusion
+// resting on a sealed premise is only written under a sensitive predicate.
+func (w *KGTx) checkNoSealedCopy(p, o Value, support []int64) error {
+	if !isLiteralKind(o.Kind) || len(support) == 0 {
+		return nil
+	}
+	po, _, err := encodeValue(w.ctx, w.q, p, true)
+	if err != nil {
+		return err
+	}
+	if sens, err := isSensitive(w.ctx, w.q, po); err != nil || sens {
+		return err
+	}
+	args := make([]any, len(support))
+	for i, e := range support {
+		args[i] = e
+	}
+	sealed, err := collectInts(w.ctx, w.q, "SELECT eid FROM kg_stmt WHERE eid IN ("+placeholders(len(args))+
+		") AND (o & 15) = 9 LIMIT 1", args)
+	if err != nil {
+		return err
+	}
+	if len(sealed) > 0 {
+		return fmt.Errorf("%w: %s would copy the sensitive value of e%d into a predicate that is not sensitive",
+			ErrNotMaterializable, p, sealed[0])
+	}
+	return nil
 }

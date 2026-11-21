@@ -159,6 +159,9 @@ func (v View) Paths(ctx context.Context, pq PathQuery) ([]Path, error) {
 	if pq.From == "" && pq.To == "" {
 		return nil, fmt.Errorf("palace: kg: path search needs from or to")
 	}
+	if pq.From == "" && pq.TimeRespecting {
+		return nil, fmt.Errorf("palace: kg: a time-respecting path search needs from; searching back from to alone is not supported")
+	}
 	if pq.MinHops < 0 || pq.MaxHops < 0 || pq.Limit < 0 || pq.MaxFrontier < 0 {
 		return nil, fmt.Errorf("palace: kg: path limits must not be negative")
 	}

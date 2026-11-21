@@ -134,6 +134,17 @@ func (v View) bundle(ctx context.Context, q querier, root int64, opts BundleOpti
 	if err != nil {
 		return nil, err
 	}
+	if len(v.graphs) > 0 {
+		// The walk applies the transaction-time view; the graph scope is
+		// applied per statement so nothing outside the graph is exported.
+		in := deps[:0]
+		for _, d := range deps {
+			if d == root || visibleIn(ctx, q, v, d) {
+				in = append(in, d)
+			}
+		}
+		deps = in
+	}
 	members := map[int64]*bundleMember{}
 	load := func(eids []int64) error {
 		for start := 0; start < len(eids); start += chunkSize {

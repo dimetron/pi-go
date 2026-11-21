@@ -349,9 +349,15 @@ func (s *eSolver) unify(a, b *eTerm) bool {
 	case a.kind == eVar && b.kind == eVar && a.name == b.name:
 		return true
 	case a.kind == eVar:
+		if s.occurs(a.name, b) {
+			return false
+		}
 		s.bindVar(a.name, b)
 		return true
 	case b.kind == eVar:
+		if s.occurs(b.name, a) {
+			return false
+		}
 		s.bindVar(b.name, a)
 		return true
 	case a.kind == eConst && b.kind == eConst:
@@ -557,7 +563,7 @@ func (s *eSolver) print(t *eTerm) string {
 func collectVars(t *eTerm, seen map[string]bool, out *[]string) {
 	switch t.kind {
 	case eVar:
-		if t.name != "_" && !seen[t.name] {
+		if !strings.HasPrefix(t.name, "_") && !seen[t.name] {
 			seen[t.name] = true
 			*out = append(*out, t.name)
 		}
@@ -586,6 +592,10 @@ func (v View) Elpi(ctx context.Context, prog *ElpiProgram, goal string, opts Elp
 	}
 	if opts.MaxRows <= 0 {
 		opts.MaxRows = 1000
+	}
+	anon := 0
+	for i, g := range goals {
+		goals[i] = freshAnon(g, &anon)
 	}
 	var names []string
 	seen := map[string]bool{}
@@ -640,4 +650,39 @@ func ElpiVars(rows []map[string]Value) []string {
 	}
 	sort.Strings(out)
 	return slices.Clip(out)
+}
+
+// occurs reports whether variable name occurs in t (the occurs check), so
+// unification never builds a cyclic term.
+func (s *eSolver) occurs(name string, t *eTerm) bool {
+	t = s.deref(t)
+	switch t.kind {
+	case eVar:
+		return t.name == name
+	case eApp:
+		for _, a := range t.args {
+			if s.occurs(name, a) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// freshAnon gives every _ in a goal its own variable.
+func freshAnon(t *eTerm, n *int) *eTerm {
+	switch t.kind {
+	case eVar:
+		if t.name == "_" {
+			*n++
+			return &eTerm{kind: eVar, name: "_goal" + strconv.Itoa(*n)}
+		}
+	case eApp:
+		out := &eTerm{kind: eApp, name: t.name, args: make([]*eTerm, len(t.args))}
+		for i, a := range t.args {
+			out.args[i] = freshAnon(a, n)
+		}
+		return out
+	}
+	return t
 }

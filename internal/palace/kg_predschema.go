@@ -305,6 +305,9 @@ func (w *KGTx) checkSchemaAgainstData(po objectID, sch PredicateSchema) error {
 		if err := w.violatingTags(po, "o", tags, "value type "+sch.ValueType); err != nil {
 			return err
 		}
+		if err := w.sealedKindViolations(po, sch.ValueType); err != nil {
+			return err
+		}
 	}
 	if sch.SubjectType != "" {
 		tag := tagEntity
@@ -337,6 +340,13 @@ func (w *KGTx) checkSchemaAgainstData(po objectID, sch PredicateSchema) error {
 		}
 		if len(eids) > 0 {
 			return fmt.Errorf("%w: sensitive, but plaintext values exist in %v", ErrSchemaViolation, eids)
+		}
+		var vol int
+		if err := w.q.QueryRowContext(w.ctx, "SELECT count(*) FROM kg_volatile WHERE key = ?", po).Scan(&vol); err != nil {
+			return fmt.Errorf("palace: kg: volatile check: %w", err)
+		}
+		if vol > 0 {
+			return fmt.Errorf("%w: sensitive, but %d volatile plaintext value(s) exist; clear them first", ErrSchemaViolation, vol)
 		}
 	}
 	return nil
@@ -456,6 +466,13 @@ func (w *KGTx) UpsertDerived(p, o Value, support []int64) (node Value, eid int64
 	if err != nil {
 		return Value{}, 0, false, err
 	}
+	if okP {
+		if sens, err := isSensitive(w.ctx, w.q, po); err != nil {
+			return Value{}, 0, false, err
+		} else if sens {
+			return Value{}, 0, false, fmt.Errorf("%w: derived upsert on sensitive predicate %s", ErrSchemaViolation, p)
+		}
+	}
 	oo, okO, err := encodeValue(w.ctx, w.q, o, false)
 	if err != nil {
 		return Value{}, 0, false, err
@@ -519,4 +536,32 @@ func (w *KGTx) ensureOne(p Value) error {
 	}
 	sch.One = true
 	return w.SetPredicate(p, sch)
+}
+
+// sealedKindViolations decrypts the live sealed objects of p and rejects a
+// value type they do not have. Erased values cannot be checked and pass.
+func (w *KGTx) sealedKindViolations(po objectID, valueType string) error {
+	rows, err := collectInts(w.ctx, w.q,
+		"SELECT o FROM kg_stmt WHERE p = ? AND t_ret IS NULL AND (o & 15) = 9", []any{po})
+	if err != nil || len(rows) == 0 {
+		return err
+	}
+	ids := make([]objectID, len(rows))
+	for i, o := range rows {
+		ids[i] = objectID(o)
+	}
+	d := newDecoder()
+	if err := d.load(w.ctx, w.q, ids); err != nil {
+		return err
+	}
+	for _, o := range ids {
+		v := d.value(o)
+		if v.Kind == KindString && v.Text == ErasedText {
+			continue
+		}
+		if valueKindNames[v.Kind] != valueType {
+			return fmt.Errorf("%w: value type %s broken by a sealed %s value", ErrSchemaViolation, valueType, valueKindNames[v.Kind])
+		}
+	}
+	return nil
 }

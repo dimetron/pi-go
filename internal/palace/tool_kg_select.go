@@ -82,14 +82,6 @@ func palaceKGSelectHandler(ctx context.Context, p *Palace, input KGSelectToolInp
 	if maxRows <= 0 {
 		maxRows = 200
 	}
-	if input.SaveAs != "" {
-		a, err := kg.SaveAnswer(ctx, input.SaveAs, lang, input.Query, v)
-		if err != nil {
-			return KGSelectToolOutput{Content: fmt.Sprintf("Error: %v", err)}, nil
-		}
-		return KGSelectToolOutput{Content: fmt.Sprintf("%d row(s), %s, saved as %s:\n%s",
-			len(a.Rows), a.View, a.Name, FormatRows(a.Vars, a.Rows))}, nil
-	}
 	// The budget counts statements read as well as rows returned.
 	res, err := v.RunQuery(ctx, lang, input.Query, QueryOptions{Budget: Budget{MaxRows: maxRows * 50}})
 	if err != nil {
@@ -98,6 +90,15 @@ func palaceKGSelectHandler(ctx context.Context, p *Palace, input KGSelectToolInp
 	if len(res.Rows) > maxRows {
 		return KGSelectToolOutput{Content: fmt.Sprintf("Error: %d rows, more than max_rows=%d; add LIMIT or narrow the query",
 			len(res.Rows), maxRows)}, nil
+	}
+	// Saving runs only after the same budget and row cap passed.
+	if input.SaveAs != "" {
+		a, err := kg.SaveAnswer(ctx, input.SaveAs, lang, input.Query, v)
+		if err != nil {
+			return KGSelectToolOutput{Content: fmt.Sprintf("Error: %v", err)}, nil
+		}
+		return KGSelectToolOutput{Content: fmt.Sprintf("%d row(s), %s, saved as %s:\n%s",
+			len(a.Rows), a.View, a.Name, FormatRows(a.Vars, a.Rows))}, nil
 	}
 	return KGSelectToolOutput{Content: fmt.Sprintf("%d row(s), %s:\n%s", len(res.Rows), v, FormatRows(res.Vars, res.Rows))}, nil
 }
