@@ -38,3 +38,13 @@ func TestToolKG_Rules(t *testing.T) {
 	out, _ = palaceKGRulesHandler(ctx, p, KGRulesToolInput{Action: "solve", Program: "p(X) :- q(X, Y", Goal: "p(X)"})
 	mustContain(t, out.Content, "Error:")
 }
+
+func TestToolKG_RulesElpi(t *testing.T) {
+	p := newToolPalace(t)
+	ctx := mockToolCtx{Context: context.Background()}
+	palaceKGAddHandler(ctx, p, KGAddToolInput{Subject: "alice", Predicate: "manager", Object: "bob"})
+	palaceKGAddHandler(ctx, p, KGAddToolInput{Subject: "bob", Predicate: "manager", Object: "carol"})
+	out, _ := palaceKGRulesHandler(ctx, p, KGRulesToolInput{Action: "solve", Syntax: "elpi", Goal: "reports alice Y",
+		Program: "reports X Y :- tm.triple X manager Y.\nreports X Z :- tm.triple X manager Y, reports Y Z."})
+	mustContain(t, out.Content, "2 solution(s)", "Y=bob", "Y=carol")
+}

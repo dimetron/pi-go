@@ -23,7 +23,7 @@ type KGRulesToolInput struct {
 	Name string `json:"name,omitempty"`
 	// The rules text (store; or inline for solve/check).
 	Program string `json:"program,omitempty"`
-	// datalog (default) or n3.
+	// datalog (default), n3, or elpi (solve only: clauses like "reports X Y :- tm.triple X manager Y.").
 	Syntax string `json:"syntax,omitempty"`
 	// solve: the goal, e.g. reports(alice, Y).
 	Goal string `json:"goal,omitempty"`
@@ -95,6 +95,9 @@ func palaceKGRulesHandler(ctx context.Context, p *Palace, input KGRulesToolInput
 	case "solve":
 		if input.Goal == "" {
 			return KGRulesToolOutput{Content: "Error: goal is required"}, nil
+		}
+		if syntax == "elpi" {
+			return elpiSolve(ctx, v, input)
 		}
 		prog, err := program()
 		if err != nil {
@@ -169,4 +172,24 @@ func formatEIDs(eids []int64) string {
 		parts[i] = fmt.Sprintf("e%d", e)
 	}
 	return strings.Join(parts, " ")
+}
+
+func elpiSolve(ctx context.Context, v View, input KGRulesToolInput) (KGRulesToolOutput, error) {
+	prog, err := ParseElpi(input.Program)
+	if err != nil {
+		return rulesErr(err)
+	}
+	res, err := v.Elpi(ctx, prog, input.Goal, ElpiOptions{})
+	if err != nil {
+		return rulesErr(err)
+	}
+	if len(res.Rows) == 0 {
+		return KGRulesToolOutput{Content: "No solutions."}, nil
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "%d solution(s), %d steps:\n", len(res.Rows), res.FuelUsed)
+	for _, r := range res.Rows {
+		fmt.Fprintf(&sb, "- %s\n", formatBindings(r))
+	}
+	return KGRulesToolOutput{Content: sb.String()}, nil
 }
