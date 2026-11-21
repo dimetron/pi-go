@@ -54,8 +54,8 @@ database. No cgo, no new dependency, one file.
 - Agent behaviour: whether models use confidence, revise and explain well was
   not evaluated (`make eval-tools` not run).
 
-## Deferred
+## Phase 2
 
-Named graphs, fact bundles, volatile state, SPARQL/Cypher, paths, Datalog/N3/
-ELPI, saved answers, statement vectors, crypto-shredding, derived upsert and
-widening (D51/D52). See `research/feature-map.md`.
+Everything phase 1 deferred is now ported; see `phase2/summary.md`. Only the
+redb engine, WASM host, language bindings, MCP server and the `tm` CLI are not
+applicable to pi-go (feature map row 27).

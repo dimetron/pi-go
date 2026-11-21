@@ -12,7 +12,7 @@ import (
 //	@prefix : <http://example.org/> .
 //	{ ?a :manager ?b . ?b :reports ?c } => { ?a :reports ?c } .
 //
-// compiles to the same rule IR as Datalog and shares its evaluator. A triple
+// compiles to the same rule IR as Datalog and shares its ruleEvaluator. A triple
 // "?s :p ?o" is the atom p(S, O): a prefixed name or IRI is reduced to its
 // local name (the part after the colon, or the whole <iri>), so :p and ex:p
 // name the same predicate and entity. The builtins math:lessThan,
@@ -103,7 +103,7 @@ func lexN3(src string) ([]n3Tok, []rune, error) {
 				adv(1)
 			}
 			if i >= len(rs) {
-				return nil, nil, parseErr(l, cl, "unterminated IRI")
+				return nil, nil, ruleParseErr(l, cl, "unterminated IRI")
 			}
 			text := string(rs[start+1 : i])
 			adv(1)
@@ -114,7 +114,7 @@ func lexN3(src string) ([]n3Tok, []rune, error) {
 				adv(1)
 			}
 			if i == start+1 {
-				return nil, nil, parseErr(l, cl, "empty variable name")
+				return nil, nil, ruleParseErr(l, cl, "empty variable name")
 			}
 			toks = append(toks, n3Tok{kind: nVar, text: string(rs[start+1 : i]), line: l, col: cl, start: start})
 		case c == '"':
@@ -134,7 +134,7 @@ func lexN3(src string) ([]n3Tok, []rune, error) {
 				adv(1)
 			}
 			if !closed {
-				return nil, nil, parseErr(l, cl, "unterminated string")
+				return nil, nil, ruleParseErr(l, cl, "unterminated string")
 			}
 			toks = append(toks, n3Tok{kind: nStr, text: sb.String(), val: Str(sb.String()), line: l, col: cl, start: start})
 		case unicode.IsDigit(c) || (c == '-' && unicode.IsDigit(at(1))):
@@ -156,7 +156,7 @@ func lexN3(src string) ([]n3Tok, []rune, error) {
 			}
 			toks = append(toks, n3Tok{kind: nName, text: string(rs[start:i]), line: l, col: cl, start: start})
 		default:
-			return nil, nil, parseErr(l, cl, "unexpected character %q", c)
+			return nil, nil, ruleParseErr(l, cl, "unexpected character %q", c)
 		}
 	}
 	toks = append(toks, n3Tok{kind: nEOF, line: line, col: col, start: len(rs)})
@@ -207,7 +207,7 @@ func (p *n3Parser) local(t n3Tok) (string, bool, error) {
 	}
 	i := strings.Index(t.text, ":")
 	if i < 0 {
-		return "", false, parseErr(t.line, t.col, "bare word %q is not supported; use a prefixed name", t.text)
+		return "", false, ruleParseErr(t.line, t.col, "bare word %q is not supported; use a prefixed name", t.text)
 	}
 	prefix, local := t.text[:i], t.text[i+1:]
 	iri, declared := p.prefixes[prefix]
@@ -215,10 +215,10 @@ func (p *n3Parser) local(t n3Tok) (string, bool, error) {
 		return prefix + ":" + local, true, nil
 	}
 	if !declared {
-		return "", false, parseErr(t.line, t.col, "undeclared prefix %q", prefix+":")
+		return "", false, ruleParseErr(t.line, t.col, "undeclared prefix %q", prefix+":")
 	}
 	if local == "" {
-		return "", false, parseErr(t.line, t.col, "empty local name in %q", t.text)
+		return "", false, ruleParseErr(t.line, t.col, "empty local name in %q", t.text)
 	}
 	return local, false, nil
 }
@@ -236,13 +236,13 @@ func (p *n3Parser) term() (n3Term, error) {
 			return n3Term{}, err
 		}
 		if builtin {
-			return n3Term{}, parseErr(t.line, t.col, "%s is only valid as a predicate", t.text)
+			return n3Term{}, ruleParseErr(t.line, t.col, "%s is only valid as a predicate", t.text)
 		}
 		return n3Term{val: Ent(l)}, nil
 	case nLBrace:
-		return n3Term{}, parseErr(t.line, t.col, "nested formulas are not supported")
+		return n3Term{}, ruleParseErr(t.line, t.col, "nested formulas are not supported")
 	}
-	return n3Term{}, parseErr(t.line, t.col, "expected a term, found %s", n3Describe(t))
+	return n3Term{}, ruleParseErr(t.line, t.col, "expected a term, found %s", n3Describe(t))
 }
 
 // swapNamespaces are the N3 builtin vocabularies; only three math: predicates
@@ -259,7 +259,7 @@ var n3Builtins = map[string]string{
 func (p *n3Parser) formula() ([]n3Triple, error) {
 	open := p.next()
 	if open.kind != nLBrace {
-		return nil, parseErr(open.line, open.col, "expected '{', found %s", n3Describe(open))
+		return nil, ruleParseErr(open.line, open.col, "expected '{', found %s", n3Describe(open))
 	}
 	var out []n3Triple
 	for {
@@ -273,10 +273,10 @@ func (p *n3Parser) formula() ([]n3Triple, error) {
 		}
 		pt := p.next()
 		if pt.kind == nVar {
-			return nil, parseErr(pt.line, pt.col, "variable predicates are not supported")
+			return nil, ruleParseErr(pt.line, pt.col, "variable predicates are not supported")
 		}
 		if pt.kind != nName && pt.kind != nIRI {
-			return nil, parseErr(pt.line, pt.col, "expected a predicate, found %s", n3Describe(pt))
+			return nil, ruleParseErr(pt.line, pt.col, "expected a predicate, found %s", n3Describe(pt))
 		}
 		name, builtin, err := p.local(pt)
 		if err != nil {
@@ -286,7 +286,7 @@ func (p *n3Parser) formula() ([]n3Triple, error) {
 		if builtin {
 			op, ok := n3Builtins[name]
 			if !ok {
-				return nil, parseErr(pt.line, pt.col, "unsupported builtin %s (want math:lessThan, math:greaterThan or math:notEqualTo)", pt.text)
+				return nil, ruleParseErr(pt.line, pt.col, "unsupported builtin %s (want math:lessThan, math:greaterThan or math:notEqualTo)", pt.text)
 			}
 			tr.pred, tr.op = op, true
 		}
@@ -299,7 +299,7 @@ func (p *n3Parser) formula() ([]n3Triple, error) {
 			p.next()
 		case nRBrace:
 		default:
-			return nil, parseErr(t.line, t.col, "expected '.' or '}', found %s", n3Describe(t))
+			return nil, ruleParseErr(t.line, t.col, "expected '.' or '}', found %s", n3Describe(t))
 		}
 	}
 }
@@ -328,7 +328,7 @@ func ParseN3(text string) (*Program, error) {
 			continue
 		}
 		if t.kind != nLBrace {
-			return nil, parseErr(t.line, t.col, "facts are not supported in a program: assert them in the graph (found %s)", n3Describe(t))
+			return nil, ruleParseErr(t.line, t.col, "facts are not supported in a program: assert them in the graph (found %s)", n3Describe(t))
 		}
 		body, err := p.formula()
 		if err != nil {
@@ -336,7 +336,7 @@ func ParseN3(text string) (*Program, error) {
 		}
 		imp := p.next()
 		if imp.kind != nImplies {
-			return nil, parseErr(imp.line, imp.col, "expected '=>', found %s", n3Describe(imp))
+			return nil, ruleParseErr(imp.line, imp.col, "expected '=>', found %s", n3Describe(imp))
 		}
 		head, err := p.formula()
 		if err != nil {
@@ -344,12 +344,12 @@ func ParseN3(text string) (*Program, error) {
 		}
 		end := p.next()
 		if end.kind != nDot {
-			return nil, parseErr(end.line, end.col, "expected '.', found %s", n3Describe(end))
+			return nil, ruleParseErr(end.line, end.col, "expected '.', found %s", n3Describe(end))
 		}
 		src := strings.TrimSpace(string(rs[t.start : end.start+1]))
 		for _, h := range head {
 			if h.op {
-				return nil, parseErr(h.tok.line, h.tok.col, "a builtin cannot be a rule head")
+				return nil, ruleParseErr(h.tok.line, h.tok.col, "a builtin cannot be a rule head")
 			}
 			b := newRuleBuilder()
 			r := &rule{src: src, index: len(rules) + 1}
@@ -372,18 +372,18 @@ func ParseN3(text string) (*Program, error) {
 func (p *n3Parser) prefixDecl() error {
 	kw := p.next()
 	if kw.text != "@prefix" {
-		return parseErr(kw.line, kw.col, "unsupported directive %s", kw.text)
+		return ruleParseErr(kw.line, kw.col, "unsupported directive %s", kw.text)
 	}
 	name := p.next()
 	if name.kind != nName || !strings.HasSuffix(name.text, ":") {
-		return parseErr(name.line, name.col, "expected a prefix name like 'ex:', found %s", n3Describe(name))
+		return ruleParseErr(name.line, name.col, "expected a prefix name like 'ex:', found %s", n3Describe(name))
 	}
 	iri := p.next()
 	if iri.kind != nIRI {
-		return parseErr(iri.line, iri.col, "expected <iri>, found %s", n3Describe(iri))
+		return ruleParseErr(iri.line, iri.col, "expected <iri>, found %s", n3Describe(iri))
 	}
 	if dot := p.next(); dot.kind != nDot {
-		return parseErr(dot.line, dot.col, "expected '.', found %s", n3Describe(dot))
+		return ruleParseErr(dot.line, dot.col, "expected '.', found %s", n3Describe(dot))
 	}
 	p.prefixes[strings.TrimSuffix(name.text, ":")] = iri.text
 	return nil

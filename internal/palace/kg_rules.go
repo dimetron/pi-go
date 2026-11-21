@@ -124,7 +124,7 @@ const triplePred = "triple"
 
 var builtinOps = map[string]bool{"=": true, "!=": true, "<": true, "<=": true, ">": true, ">=": true, "contains": true}
 
-func parseErr(line, col int, format string, args ...any) error {
+func ruleParseErr(line, col int, format string, args ...any) error {
 	return fmt.Errorf("%w: %d:%d: %s", ErrRuleParse, line, col, fmt.Sprintf(format, args...))
 }
 
@@ -341,7 +341,7 @@ func lexDatalog(src string) ([]token, []rune, error) {
 				adv(1)
 			}
 			if !closed {
-				return nil, nil, parseErr(l, cl, "unterminated string")
+				return nil, nil, ruleParseErr(l, cl, "unterminated string")
 			}
 			toks = append(toks, token{kind: tkStr, text: sb.String(), val: Str(sb.String()), line: l, col: cl, start: start, end: i})
 		case unicode.IsDigit(c) || (c == '-' && unicode.IsDigit(at(1))):
@@ -385,7 +385,7 @@ func lexDatalog(src string) ([]token, []rune, error) {
 				}
 			}
 			if op == "" {
-				return nil, nil, parseErr(l, cl, "unexpected character %q", c)
+				return nil, nil, ruleParseErr(l, cl, "unexpected character %q", c)
 			}
 			adv(len(op))
 			toks = append(toks, token{kind: tkPunct, text: op, line: l, col: cl, start: start, end: i})
@@ -442,7 +442,7 @@ func (p *dlParser) isPunct(s string) bool {
 func (p *dlParser) expect(s string) error {
 	t := p.next()
 	if t.kind != tkPunct || t.text != s {
-		return parseErr(t.line, t.col, "expected %q, found %s", s, describe(t))
+		return ruleParseErr(t.line, t.col, "expected %q, found %s", s, describe(t))
 	}
 	return nil
 }
@@ -465,7 +465,7 @@ func (p *dlParser) term(b *ruleBuilder) (term, error) {
 	case tkStr, tkNum:
 		return constTerm(t.val), nil
 	}
-	return term{}, parseErr(t.line, t.col, "expected a term, found %s", describe(t))
+	return term{}, ruleParseErr(t.line, t.col, "expected a term, found %s", describe(t))
 }
 
 func (p *dlParser) args(b *ruleBuilder) ([]term, error) {
@@ -491,7 +491,7 @@ func (p *dlParser) args(b *ruleBuilder) ([]term, error) {
 func (p *dlParser) atom(b *ruleBuilder) (literal, error) {
 	t := p.next()
 	if t.kind != tkIdent {
-		return literal{}, parseErr(t.line, t.col, "expected a predicate name, found %s", describe(t))
+		return literal{}, ruleParseErr(t.line, t.col, "expected a predicate name, found %s", describe(t))
 	}
 	args, err := p.args(b)
 	if err != nil {
@@ -511,7 +511,7 @@ func (p *dlParser) bodyLiteral(b *ruleBuilder) (literal, error) {
 			return l, err
 		}
 		if l.pred == "contains" {
-			return l, parseErr(t.line, t.col, "contains cannot be negated")
+			return l, ruleParseErr(t.line, t.col, "contains cannot be negated")
 		}
 		l.kind = litNot
 		return l, nil
@@ -523,7 +523,7 @@ func (p *dlParser) bodyLiteral(b *ruleBuilder) (literal, error) {
 		}
 		if l.pred == "contains" {
 			if len(l.args) != 2 {
-				return l, parseErr(t.line, t.col, "contains takes 2 arguments")
+				return l, ruleParseErr(t.line, t.col, "contains takes 2 arguments")
 			}
 			l.kind = litBuiltin
 		}
@@ -535,7 +535,7 @@ func (p *dlParser) bodyLiteral(b *ruleBuilder) (literal, error) {
 	}
 	op := p.next()
 	if op.kind != tkPunct || !cmpOps[op.text] {
-		return literal{}, parseErr(op.line, op.col, "expected a comparison operator, found %s", describe(op))
+		return literal{}, ruleParseErr(op.line, op.col, "expected a comparison operator, found %s", describe(op))
 	}
 	right, err := p.term(b)
 	if err != nil {
@@ -566,11 +566,11 @@ func ParseDatalog(text string) (*Program, error) {
 				return nil, err
 			}
 			if h.pred == "contains" {
-				return nil, parseErr(start.line, start.col, "contains is a builtin and cannot be defined")
+				return nil, ruleParseErr(start.line, start.col, "contains is a builtin and cannot be defined")
 			}
 			r.head = &h
 			if p.isPunct(".") {
-				return nil, parseErr(start.line, start.col, "facts are not supported in a program: assert them in the graph")
+				return nil, ruleParseErr(start.line, start.col, "facts are not supported in a program: assert them in the graph")
 			}
 			if err := p.expect(":-"); err != nil {
 				return nil, err
@@ -795,7 +795,7 @@ func valuesEqual(a, b Value) bool {
 	return a == b
 }
 
-func compareValues(a, b Value) (int, bool) {
+func ruleCompareValues(a, b Value) (int, bool) {
 	if x, ok := numOf(a); ok {
 		if y, ok := numOf(b); ok {
 			return cmp.Compare(x, y), true
@@ -831,7 +831,7 @@ func evalBuiltin(l *literal, env []Value) bool {
 		y, ok2 := textOf(b)
 		return ok1 && ok2 && strings.Contains(x, y)
 	}
-	c, ok := compareValues(a, b)
+	c, ok := ruleCompareValues(a, b)
 	if !ok {
 		return false
 	}
@@ -848,9 +848,9 @@ func evalBuiltin(l *literal, env []Value) bool {
 	return false
 }
 
-// --- evaluator ---
+// --- ruleEvaluator ---
 
-type evaluator struct {
+type ruleEvaluator struct {
 	ctx     context.Context
 	q       querier
 	v       View
@@ -879,9 +879,9 @@ func (d *deltaSet) add(pred string, t *tuple) {
 	}
 }
 
-func newEvaluator(ctx context.Context, q querier, v View, p *Program, opts RuleOptions, exclude map[int64]bool) *evaluator {
+func newEvaluator(ctx context.Context, q querier, v View, p *Program, opts RuleOptions, exclude map[int64]bool) *ruleEvaluator {
 	opts = opts.withDefaults()
-	e := &evaluator{
+	e := &ruleEvaluator{
 		ctx: ctx, q: q, v: v, m: newMeter(ctx, opts.Budget), opts: opts, prog: p,
 		rels: map[string]*relation{}, stored: map[string]*relation{}, exclude: exclude,
 	}
@@ -891,7 +891,7 @@ func newEvaluator(ctx context.Context, q querier, v View, p *Program, opts RuleO
 	return e
 }
 
-func (e *evaluator) tick() error {
+func (e *ruleEvaluator) tick() error {
 	e.steps++
 	if e.steps&0xff == 0 {
 		return e.m.check()
@@ -908,7 +908,7 @@ func msPtr(t *time.Time) *int64 {
 }
 
 // relation returns the relation for pred, loading a stored one from the view.
-func (e *evaluator) relation(pred string, arity int) (*relation, error) {
+func (e *ruleEvaluator) relation(pred string, arity int) (*relation, error) {
 	if r, ok := e.rels[pred]; ok {
 		return r, nil
 	}
@@ -949,7 +949,7 @@ func (e *evaluator) relation(pred string, arity int) (*relation, error) {
 
 // addTuple adds a fragment to the relation's tuple, creating the tuple. count
 // charges derived tuples against MaxFacts and the budget.
-func (e *evaluator) addTuple(rel *relation, vals []Value, f frag, d *deltaSet, pred string, count bool) error {
+func (e *ruleEvaluator) addTuple(rel *relation, vals []Value, f frag, d *deltaSet, pred string, count bool) error {
 	key := tupleKey(vals)
 	t, ok := rel.byKey[key]
 	if !ok {
@@ -1072,7 +1072,7 @@ type joinState struct {
 	emit  func(frag) error
 }
 
-func (e *evaluator) literalArity(l *literal) int {
+func (e *ruleEvaluator) literalArity(l *literal) int {
 	if a, ok := e.prog.arity[l.pred]; ok {
 		return a
 	}
@@ -1082,7 +1082,7 @@ func (e *evaluator) literalArity(l *literal) int {
 	return 2
 }
 
-func (e *evaluator) join(st *joinState, k int, cur frag) error {
+func (e *ruleEvaluator) join(st *joinState, k int, cur frag) error {
 	if err := e.tick(); err != nil {
 		return err
 	}
@@ -1175,14 +1175,14 @@ func (st *joinState) value(t term) Value {
 	return t.c
 }
 
-func (e *evaluator) evalBody(r *rule, delta int, dts []*tuple, emit func(env []Value, f frag) error) error {
+func (e *ruleEvaluator) evalBody(r *rule, delta int, dts []*tuple, emit func(env []Value, f frag) error) error {
 	st := &joinState{r: r, order: planOrder(r, delta), delta: delta, dts: dts,
 		env: make([]Value, len(r.vars)), bound: make([]bool, len(r.vars))}
 	st.emit = func(f frag) error { return emit(st.env, f) }
 	return e.join(st, 0, frag{})
 }
 
-func (e *evaluator) evalRule(r *rule, delta int, dts []*tuple) error {
+func (e *ruleEvaluator) evalRule(r *rule, delta int, dts []*tuple) error {
 	head := r.head
 	rel := e.rels[head.pred]
 	return e.evalBody(r, delta, dts, func(env []Value, f frag) error {
@@ -1198,7 +1198,7 @@ func (e *evaluator) evalRule(r *rule, delta int, dts []*tuple) error {
 	})
 }
 
-func (e *evaluator) runStratum(s int) error {
+func (e *ruleEvaluator) runStratum(s int) error {
 	var rules []*rule
 	for _, r := range e.prog.rules {
 		if e.prog.stratum[r.head.pred] == s {
@@ -1241,7 +1241,7 @@ func (e *evaluator) runStratum(s int) error {
 }
 
 // run derives every rule to its fixpoint, stratum by stratum.
-func (e *evaluator) run() error {
+func (e *ruleEvaluator) run() error {
 	for s := 0; s < e.prog.nStrata; s++ {
 		if err := e.runStratum(s); err != nil {
 			return err
@@ -1284,7 +1284,7 @@ func parseGoal(goal string) (*literal, []string, error) {
 		p.next()
 	}
 	if t := p.peek(); t.kind != tkEOF {
-		return nil, nil, parseErr(t.line, t.col, "unexpected %s after the goal", describe(t))
+		return nil, nil, ruleParseErr(t.line, t.col, "unexpected %s after the goal", describe(t))
 	}
 	return &l, b.vars, nil
 }

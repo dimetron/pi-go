@@ -417,3 +417,12 @@ Upstream-scope adjustments that follow: `Materialize` rejects programs with
 negation (`ErrNotMaterializable`, like upstream `N3NotMaterializable`); `Solve`
 and `Check` accept them, with negation evaluated over the whole view
 (atemporal), which is documented on `Solve`.
+
+## Implementation notes
+
+Where the code differs from the text above: `palace-kg-select` takes `sparql`
+and `cypher`; Datalog, N3 and ELPI goals go through `palace-kg-rules` (one tool
+per kind of program). ELPI is implemented as a Horn-clause subset
+(`kg_elpi.go`) rather than recorded as Adapt. Volatile state, saved-answer
+management and erasure are CLI commands; agents reach saved answers through
+`palace-kg-select save_as` / `check`. `Materialize` reads only the now view.
