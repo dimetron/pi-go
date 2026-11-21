@@ -6,7 +6,6 @@ import (
 	"database/sql/driver"
 	"errors"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -480,7 +479,6 @@ func TestKGCov_ReadFaultsPropagate(t *testing.T) {
 	for name, op := range ops {
 		t.Run(name, func(t *testing.T) {
 			setup(t)
-			w.kg.lenient = strings.HasPrefix(name, "bundle") // see TestKGCov_BundleMasksStorageErrors
 			tolerated := 0
 			if name == "erase-real" {
 				tolerated = 1
@@ -495,8 +493,6 @@ func TestKGCov_ReadFaultsPropagate(t *testing.T) {
 // Bundle export reports a storage failure as "statement is not live" (and
 // skips a statement whose predicate it could not load as an engine one).
 func TestKGCov_BundleMasksStorageErrors(t *testing.T) {
-	t.Skip("bug: kg_bundle.go visibleIn and isEngineOID swallow database errors; " +
-		"Bundle then returns ErrNotLive or silently drops statements instead of the storage error")
 	w := newWorld(t)
 	ctx := context.Background()
 	w.kg.sweep(t, 0, func(kg *KnowledgeGraph) error {

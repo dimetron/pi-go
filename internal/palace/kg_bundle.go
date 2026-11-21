@@ -118,7 +118,11 @@ func (v View) bundle(ctx context.Context, q querier, root int64, opts BundleOpti
 	if err != nil {
 		return nil, err
 	}
-	if len(rootRows) == 0 || !visibleIn(ctx, q, v, root) {
+	rootVisible, err := visibleIn(ctx, q, v, root)
+	if err != nil {
+		return nil, err
+	}
+	if len(rootRows) == 0 || !rootVisible {
 		return nil, fmt.Errorf("%w: e%d is not visible in %s", ErrNotLive, root, v)
 	}
 	skip, err := bundleSkipped(ctx, q)
@@ -139,7 +143,13 @@ func (v View) bundle(ctx context.Context, q querier, root int64, opts BundleOpti
 		// applied per statement so nothing outside the graph is exported.
 		in := deps[:0]
 		for _, d := range deps {
-			if d == root || visibleIn(ctx, q, v, d) {
+			ok := d == root
+			if !ok {
+				if ok, err = visibleIn(ctx, q, v, d); err != nil {
+					return nil, err
+				}
+			}
+			if ok {
 				in = append(in, d)
 			}
 		}
@@ -179,12 +189,22 @@ func (v View) bundle(ctx context.Context, q querier, root int64, opts BundleOpti
 			continue
 		}
 		if e == root {
-			if isEngineOID(ctx, q, m.row.p) {
+			eng, err := isEngineOID(ctx, q, m.row.p)
+			if err != nil {
+				return nil, err
+			}
+			if eng {
 				return nil, fmt.Errorf("%w: e%d is engine bookkeeping", ErrReservedPredicate, root)
 			}
 			continue
 		}
-		if skip[m.row.p] || (m.row.p != inGraph && isEngineOID(ctx, q, m.row.p)) {
+		eng := false
+		if !skip[m.row.p] && m.row.p != inGraph {
+			if eng, err = isEngineOID(ctx, q, m.row.p); err != nil {
+				return nil, err
+			}
+		}
+		if skip[m.row.p] || eng {
 			dropped[e] = true
 			continue
 		}
@@ -217,11 +237,23 @@ func (v View) bundle(ctx context.Context, q querier, root int64, opts BundleOpti
 				return nil, err
 			}
 			rm := members[ref]
-			if rm == nil || !visibleIn(ctx, q, v, ref) {
+			refVisible := false
+			if rm != nil {
+				if refVisible, err = visibleIn(ctx, q, v, ref); err != nil {
+					return nil, err
+				}
+			}
+			if !refVisible {
 				delete(members, ref)
 				return nil, fmt.Errorf("%w: e%d, referenced by e%d, is not visible in %s", ErrNotLive, ref, e, v)
 			}
-			if skip[rm.row.p] || isEngineOID(ctx, q, rm.row.p) {
+			refEng := false
+			if !skip[rm.row.p] {
+				if refEng, err = isEngineOID(ctx, q, rm.row.p); err != nil {
+					return nil, err
+				}
+			}
+			if skip[rm.row.p] || refEng {
 				return nil, fmt.Errorf("%w: e%d, referenced by e%d, is engine bookkeeping", ErrReservedPredicate, ref, e)
 			}
 			queue = append(queue, ref)
@@ -258,25 +290,25 @@ func (v View) bundle(ctx context.Context, q querier, root int64, opts BundleOpti
 
 // visibleIn reports whether eid passes the view's full condition (including
 // its graph restriction).
-func visibleIn(ctx context.Context, q querier, v View, eid int64) bool {
+func visibleIn(ctx context.Context, q querier, v View, eid int64) (bool, error) {
 	cond, args, err := v.condQ(ctx, q, "st.")
 	if err != nil {
-		return false
+		return false, err
 	}
 	var n int
 	if err := q.QueryRowContext(ctx, "SELECT count(*) FROM kg_stmt st WHERE st.eid = ? AND "+cond,
 		append([]any{eid}, args...)...).Scan(&n); err != nil {
-		return false
+		return false, fmt.Errorf("palace: kg: bundle visibility: %w", err)
 	}
-	return n > 0
+	return n > 0, nil
 }
 
-func isEngineOID(ctx context.Context, q querier, p objectID) bool {
+func isEngineOID(ctx context.Context, q querier, p objectID) (bool, error) {
 	d := newDecoder()
 	if err := d.load(ctx, q, []objectID{p}); err != nil {
-		return true
+		return false, err
 	}
-	return isEnginePredicate(d.value(p))
+	return isEnginePredicate(d.value(p)), nil
 }
 
 // bundleBuilder lays the members out as a tree whose depth-first walk is a
