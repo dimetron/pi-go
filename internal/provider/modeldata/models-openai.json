@@ -1,6 +1,6 @@
 {
   "provider": "openai",
-  "fetched_at": "2026-11-14T00:00:00Z",
+  "fetched_at": "2026-11-21T00:00:00Z",
   "models": [
     {
       "id": "chat-latest",
@@ -282,6 +282,14 @@
       "release_date": "2026-10-26"
     },
     {
+      "id": "gpt-6.2-astra",
+      "owned_by": "system"
+    },
+    {
+      "id": "gpt-6.2-sol",
+      "owned_by": "system"
+    },
+    {
       "id": "gpt-audio",
       "owned_by": "system"
     },
@@ -308,6 +316,10 @@
     },
     {
       "id": "gpt-live-1",
+      "owned_by": "system"
+    },
+    {
+      "id": "gpt-live-1.1",
       "owned_by": "system"
     },
     {

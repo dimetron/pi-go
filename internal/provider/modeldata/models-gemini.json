@@ -1,6 +1,6 @@
 {
   "provider": "gemini",
-  "fetched_at": "2026-11-14T00:00:00Z",
+  "fetched_at": "2026-11-21T00:00:00Z",
   "models": [
     {
       "id": "antigravity-preview-05-2026",
@@ -23,10 +23,6 @@
       "id": "deep-research-preview-04-2026",
       "owned_by": "Deep Research Preview (Apr-21-2026)",
       "release_date": "2026-04-21"
-    },
-    {
-      "id": "deep-research-pro-preview-12-2025",
-      "owned_by": "Deep Research Pro Preview (Dec-12-2025) [Rerouted]"
     },
     {
       "id": "gemini-2.5-computer-use-preview-10-2025",
@@ -149,11 +145,17 @@
     },
     {
       "id": "gemini-4-carbon",
-      "owned_by": "Gemini 4 Carbon"
+      "owned_by": "Gemini 4 Carbon",
+      "release_date": "2026-11-10"
     },
     {
       "id": "gemini-4-hydrogen",
-      "owned_by": "Gemini 4 Hydrogen"
+      "owned_by": "Gemini 4 Hydrogen",
+      "release_date": "2026-11-12"
+    },
+    {
+      "id": "gemini-4-neon",
+      "owned_by": "Gemini 4 Neon"
     },
     {
       "id": "gemini-embedding-001",
@@ -183,6 +185,10 @@
       "owned_by": "Gemini Omni 1.2 Flash"
     },
     {
+      "id": "gemini-omni-flash-preview",
+      "owned_by": "Gemini Omni Flash Preview"
+    },
+    {
       "id": "gemini-pro-latest",
       "owned_by": "Gemini Pro Latest",
       "release_date": "2026-02-19"
@@ -193,11 +199,13 @@
     },
     {
       "id": "gemma-4-26b-a4b-it",
-      "owned_by": "Gemma 4 26B A4B IT"
+      "owned_by": "Gemma 4 26B A4B IT",
+      "release_date": "2026-04-02"
     },
     {
       "id": "gemma-4-31b-it",
-      "owned_by": "Gemma 4 31B IT"
+      "owned_by": "Gemma 4 31B IT",
+      "release_date": "2026-04-02"
     },
     {
       "id": "lyria-3-clip-preview",
