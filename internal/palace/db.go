@@ -137,6 +137,10 @@ var migrations = []migration{
 	// Version 6: the bitemporal statement graph (kg_*), ported from Tiramemsu,
 	// and the one-time import of the legacy triples table. See kg_schema.go.
 	{sql: kgSchemaSQL, apply: importLegacyTriples},
+
+	// Version 7: side tables for volatile state, seal keys, statement vectors
+	// and saved answers. See kg_schema2.go.
+	{sql: kgSchema2SQL},
 }
 
 // OpenDB opens (or creates) a palace SQLite database at the given path with
@@ -175,6 +179,7 @@ func OpenDB(dbPath string) (*sql.DB, error) {
 const connPragmas = "_pragma=journal_mode(WAL)" +
 	"&_pragma=foreign_keys(1)" +
 	"&_pragma=busy_timeout(5000)" +
+	"&_pragma=secure_delete(1)" + // destroyed seal keys leave no copy in freed pages
 	"&_pragma=mmap_size(268435456)" // 256MB
 
 // errSchemaTooNew is returned when the database was migrated by a newer pi.

@@ -151,7 +151,7 @@ func (v View) Explain(ctx context.Context, eid int64) (*Explanation, error) {
 		if err != nil || st == nil {
 			return err
 		}
-		ex := &Explanation{Statement: *st, View: v.String()}
+		ex := &Explanation{Statement: v.mask([]Statement{*st})[0], View: v.String()}
 		cond, cargs := v.cond("")
 		var n int
 		if err := q.QueryRowContext(ctx, "SELECT count(*) FROM kg_stmt WHERE eid = ? AND "+cond,
@@ -371,7 +371,7 @@ func (v View) Conflicts(ctx context.Context, f ConflictFilter) ([]Conflict, erro
 			for e := range groups[k] {
 				eids = append(eids, e)
 			}
-			sts, err := queryStatements(ctx, q, "WHERE st.eid IN ("+placeholders(len(eids))+") ORDER BY st.eid", eids...)
+			sts, err := v.query(ctx, q, "WHERE st.eid IN ("+placeholders(len(eids))+") ORDER BY st.eid", eids...)
 			if err != nil {
 				return err
 			}
@@ -438,13 +438,16 @@ func (v View) textSearch(ctx context.Context, q querier, query string, limit int
 		return nil, err
 	}
 	ph := placeholders(len(terms))
-	cond, cargs := v.cond("st.")
+	cond, cargs, err := v.condQ(ctx, q, "st.")
+	if err != nil {
+		return nil, err
+	}
 	ef, eargs, err := engineFilter(ctx, q, "st.")
 	if err != nil {
 		return nil, err
 	}
 	args := append(append(append(append([]any{}, terms...), terms...), cargs...), eargs...)
-	return queryStatements(ctx, q, "WHERE (st.s IN ("+ph+") OR st.o IN ("+ph+")) AND "+cond+ef+
+	return v.query(ctx, q, "WHERE (st.s IN ("+ph+") OR st.o IN ("+ph+")) AND "+cond+ef+
 		fmt.Sprintf(" ORDER BY st.t_add DESC, st.eid DESC LIMIT %d", limit), args...)
 }
 
