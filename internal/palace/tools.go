@@ -22,6 +22,7 @@ func PalaceTools(p *Palace) ([]tool.Tool, error) {
 		newPalaceKGExplainTool,
 		newPalaceKGConflictsTool,
 		newPalaceKGGraphTool,
+		newPalaceKGPathTool,
 		newPalaceKGExtractTool,
 		newPalaceDiaryWriteTool,
 		newPalaceDiaryReadTool,

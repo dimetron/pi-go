@@ -137,6 +137,8 @@ func TestPalaceToolsRunEndToEnd(t *testing.T) {
 		{"palace-kg-add", map[string]any{"subject": "Bob", "predicate": "owns", "object": "billing", "graph": "team"}},
 		{"palace-kg-query", map[string]any{"entity": "Bob", "graph": "team"}},
 		{"palace-kg-graph", map[string]any{"action": "list"}},
+		{"palace-kg-add", map[string]any{"subject": "Billing", "predicate": "depends_on", "object": "Ledger"}},
+		{"palace-kg-path", map[string]any{"from": "Bob", "to": "Ledger", "direction": "out"}},
 		{"palace-kg-graph", map[string]any{"action": "remove", "eid": 2, "graph": "team"}},
 		{"palace-diary-write", map[string]any{"agent_name": "tester", "entry": "today I tested tools", "topic": "testing"}},
 		{"palace-diary-read", map[string]any{"agent_name": "tester"}},
