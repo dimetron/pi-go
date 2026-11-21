@@ -2,6 +2,7 @@ package palace
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -227,5 +228,13 @@ func TestReview_ValueTypeChecksSealedKinds(t *testing.T) {
 		return w.SetPredicate(Ent("secret"), PredicateSchema{Sensitive: true, ValueType: "string"})
 	}); err != nil {
 		t.Fatalf("matching value type rejected: %v", err)
+	}
+}
+
+// An overflowing LIMIT is a parse error with a position, like any other.
+func TestReview_SparqlLimitOverflowIsParseError(t *testing.T) {
+	_, err := ParseSPARQL("SELECT ?s WHERE { ?s <p> ?o } LIMIT 99999999999999999999999")
+	if !errors.Is(err, ErrQueryParse) || !strings.Contains(err.Error(), "out of range") {
+		t.Fatalf("err = %v", err)
 	}
 }

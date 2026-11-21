@@ -479,7 +479,11 @@ func (p *sparqlParser) intArg() (int, error) {
 	if t.k != sInt {
 		return 0, p.errAt(t, "expected an integer, found %s", describeTok(t))
 	}
-	return intTok(t.s)
+	n, err := intTok(t.s)
+	if err != nil {
+		return 0, p.errAt(t, "integer %s is out of range", t.s)
+	}
+	return n, nil
 }
 
 // groupBlock parses { ... } into a conjunction.
