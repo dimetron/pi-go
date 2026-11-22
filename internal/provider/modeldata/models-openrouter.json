@@ -1,6 +1,6 @@
 {
   "provider": "openrouter",
-  "fetched_at": "2026-11-14T00:00:00Z",
+  "fetched_at": "2026-11-22T00:00:00Z",
   "models": [
     {
       "id": "amazon/nova-2-lite-v1",
@@ -36,11 +36,11 @@
     },
     {
       "id": "anthropic/claude-fable-5.2",
-      "release_date": "2026-06-09"
+      "release_date": "2026-11-09"
     },
     {
       "id": "anthropic/claude-fable-5.2:batch",
-      "release_date": "2026-06-09"
+      "release_date": "2026-11-09"
     },
     {
       "id": "anthropic/claude-haiku-4.5",
@@ -251,16 +251,26 @@
       "release_date": "2026-10-13"
     },
     {
-      "id": "google/gemini-4-carbon"
+      "id": "google/gemini-4-carbon",
+      "release_date": "2026-11-10"
     },
     {
-      "id": "google/gemini-4-carbon:batch"
+      "id": "google/gemini-4-carbon:batch",
+      "release_date": "2026-11-10"
     },
     {
-      "id": "google/gemini-4-hydrogen"
+      "id": "google/gemini-4-hydrogen",
+      "release_date": "2026-11-12"
     },
     {
-      "id": "google/gemini-4-hydrogen:batch"
+      "id": "google/gemini-4-hydrogen:batch",
+      "release_date": "2026-11-12"
+    },
+    {
+      "id": "google/gemini-4-neon"
+    },
+    {
+      "id": "google/gemini-4-neon:batch"
     },
     {
       "id": "google/gemini-nano-banana-2.1",
@@ -307,7 +317,8 @@
       "release_date": "2024-12-06"
     },
     {
-      "id": "meta/muse-ember"
+      "id": "meta/muse-ember",
+      "release_date": "2026-11-09"
     },
     {
       "id": "meta/muse-spark-1.3",
@@ -324,10 +335,6 @@
     {
       "id": "minimax/minimax-m2.7",
       "release_date": "2026-03-18"
-    },
-    {
-      "id": "minimax/minimax-m3",
-      "release_date": "2026-06-01"
     },
     {
       "id": "minimax/minimax-m3.1-flash",
@@ -398,12 +405,11 @@
       "release_date": "2026-03-16"
     },
     {
-      "id": "mistralai/mistral-small-3.2-24b-instruct",
-      "release_date": "2025-06-20"
-    },
-    {
       "id": "mistralai/mixtral-8x22b-instruct",
       "release_date": "2024-04-17"
+    },
+    {
+      "id": "mistralai/pixtral-large-2502"
     },
     {
       "id": "mistralai/voxtral-small-24b-2507",
@@ -420,6 +426,10 @@
     {
       "id": "moonshotai/kimi-k3.1-pro",
       "release_date": "2026-10-23"
+    },
+    {
+      "id": "nvidia/nemotron-3-ultra-550b-a55b",
+      "release_date": "2026-06-04"
     },
     {
       "id": "nvidia/nemotron-3.5-lightning",
@@ -693,6 +703,30 @@
       "release_date": "2026-10-26"
     },
     {
+      "id": "openai/gpt-6.2-astra"
+    },
+    {
+      "id": "openai/gpt-6.2-astra-pro"
+    },
+    {
+      "id": "openai/gpt-6.2-astra-pro:batch"
+    },
+    {
+      "id": "openai/gpt-6.2-astra:batch"
+    },
+    {
+      "id": "openai/gpt-6.2-sol"
+    },
+    {
+      "id": "openai/gpt-6.2-sol-pro"
+    },
+    {
+      "id": "openai/gpt-6.2-sol-pro:batch"
+    },
+    {
+      "id": "openai/gpt-6.2-sol:batch"
+    },
+    {
       "id": "openai/gpt-audio",
       "release_date": "2025-08-28"
     },
@@ -771,6 +805,10 @@
       "release_date": "2025-07-31"
     },
     {
+      "id": "qwen/qwen3.8-2.4t-a95b",
+      "release_date": "2026-08-12"
+    },
+    {
       "id": "qwen/qwen3.8-27b",
       "release_date": "2026-08-14"
     },
@@ -816,10 +854,6 @@
     {
       "id": "x-ai/grok-4.7:batch",
       "release_date": "2026-09-21"
-    },
-    {
-      "id": "x-ai/grok-build-0.1",
-      "release_date": "2026-04-16"
     },
     {
       "id": "z-ai/glm-4.5",
