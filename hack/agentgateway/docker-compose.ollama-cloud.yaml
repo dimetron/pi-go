@@ -9,7 +9,7 @@
 # LLM port - http://localhost:4000/ - use as base URL
 services:
   agentgateway:
-    image: ghcr.io/agentgateway/agentgateway:v1.5.0
+    image: ghcr.io/agentgateway/agentgateway:v1.7.0
     container_name: agentgateway-ollama-cloud
     restart: unless-stopped
     ports:

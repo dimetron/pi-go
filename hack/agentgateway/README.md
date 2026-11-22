@@ -520,7 +520,7 @@ These each cost a debugging cycle when this config was built.
 
 ```bash
 docker run --rm -v "$PWD:/etc/agentgateway:ro" -w /etc/agentgateway \
-  ghcr.io/agentgateway/agentgateway:v1.5.0 --validate-only -f config.yaml
+  ghcr.io/agentgateway/agentgateway:v1.7.0 --validate-only -f config.yaml
 ```
 
 Then check a route end to end — a 200 here means the prefix was stripped and the
