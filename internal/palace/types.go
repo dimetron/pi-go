@@ -97,6 +97,8 @@ type TripleInput struct {
 	SourceFile string
 	// ConfirmExisting confirms an identical fact that already exists.
 	ConfirmExisting bool
+	// Graph puts the fact into this named graph.
+	Graph string
 	// Author and Session are recorded on the transaction.
 	Author  string
 	Session string

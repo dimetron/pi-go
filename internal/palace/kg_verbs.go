@@ -79,7 +79,19 @@ func (w *KGTx) encodeUser(s, p, o Value) (objectID, objectID, objectID, error) {
 	if s.Kind != KindEntity && s.Kind != KindStatement {
 		return 0, 0, 0, fmt.Errorf("palace: kg: subject must be an entity or a statement, got %s", s)
 	}
-	return w.encode3(s, p, o)
+	so, _, err := encodeValue(w.ctx, w.q, s, true)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	po, _, err := encodeValue(w.ctx, w.q, p, true)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	oo, err := w.encodeObject(so, po, o)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	return so, po, oo, nil
 }
 
 func (w *KGTx) encode3(s, p, o Value) (objectID, objectID, objectID, error) {
@@ -235,196 +247,6 @@ func (w *KGTx) findLive(s, p, o objectID, from, to *int64) (int64, error) {
 	return eid, nil
 }
 
-// --- predicate schema ---
-
-// PredicateSchema holds the constraints a predicate can carry.
-type PredicateSchema struct {
-	// One: a subject holds at most one object at any valid time. Asserting a
-	// new object retracts the overlapping old ones (kind "replaced"); their
-	// layers are not carried over, since they described a different fact.
-	One bool `json:"one,omitempty"`
-	// Unique: at most one live subject holds a given object.
-	Unique bool `json:"unique,omitempty"`
-}
-
-// schemaRows returns the live schema statements of predicate p.
-func (w *KGTx) schemaRows(p objectID) (card, uniq []int64, err error) {
-	cardP, okC, err := w.engineOID(sysPred(predCardinality), false)
-	if err != nil {
-		return nil, nil, err
-	}
-	uniqP, okU, err := w.engineOID(sysPred(predUnique), false)
-	if err != nil {
-		return nil, nil, err
-	}
-	if !okC && !okU {
-		return nil, nil, nil
-	}
-	rows, err := w.q.QueryContext(w.ctx,
-		"SELECT eid, p FROM kg_stmt WHERE s = ? AND p IN (?, ?) AND t_ret IS NULL ORDER BY eid", p, cardP, uniqP)
-	if err != nil {
-		return nil, nil, fmt.Errorf("palace: kg: read schema: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var (
-			eid int64
-			sp  objectID
-		)
-		if err := rows.Scan(&eid, &sp); err != nil {
-			return nil, nil, fmt.Errorf("palace: kg: scan schema: %w", err)
-		}
-		if sp == cardP {
-			card = append(card, eid)
-		} else {
-			uniq = append(uniq, eid)
-		}
-	}
-	return card, uniq, rows.Err()
-}
-
-func (w *KGTx) schemaOf(p objectID) (PredicateSchema, error) {
-	card, uniq, err := w.schemaRows(p)
-	return PredicateSchema{One: len(card) > 0, Unique: len(uniq) > 0}, err
-}
-
-// applySchema enforces p's constraints before (s, p, o) is written: a unique
-// collision fails, and a cardinality-one predicate retracts the subject's
-// other overlapping objects. The schema is read on every write, so a
-// SetPredicate earlier in the same transaction takes effect at once.
-func (w *KGTx) applySchema(s, p, o objectID, from, to *int64) error {
-	sch, err := w.schemaOf(p)
-	if err != nil {
-		return err
-	}
-	if sch.Unique {
-		var other int64
-		err := w.q.QueryRowContext(w.ctx,
-			"SELECT eid FROM kg_stmt WHERE p = ? AND o = ? AND s <> ? AND t_ret IS NULL ORDER BY eid LIMIT 1",
-			p, o, s).Scan(&other)
-		if err == nil {
-			return fmt.Errorf("%w (held by e%d)", ErrUniqueViolation, other)
-		}
-		if !errNoRows(err) {
-			return fmt.Errorf("palace: kg: unique check: %w", err)
-		}
-	}
-	if !sch.One {
-		return nil
-	}
-	rows, err := w.q.QueryContext(w.ctx,
-		"SELECT eid FROM kg_stmt WHERE s = ? AND p = ? AND o <> ? AND t_ret IS NULL AND "+overlapSQL+" ORDER BY eid",
-		s, p, o, from, from, to, to)
-	if err != nil {
-		return fmt.Errorf("palace: kg: cardinality check: %w", err)
-	}
-	var replaced []int64
-	for rows.Next() {
-		var eid int64
-		if err := rows.Scan(&eid); err != nil {
-			rows.Close()
-			return fmt.Errorf("palace: kg: scan cardinality: %w", err)
-		}
-		replaced = append(replaced, eid)
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return err
-	}
-	for _, eid := range replaced {
-		if live, err := w.isLive(eid); err != nil {
-			return err
-		} else if live {
-			if err := w.retract(eid, RetCardinality, RetCascade); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-// SetPredicate declares p's schema. It fails with ErrSchemaViolation when live
-// data already breaks the new constraint. Schema statements are ordinary
-// statements, so they are versioned like any fact.
-func (w *KGTx) SetPredicate(p Value, sch PredicateSchema) error {
-	if isEnginePredicate(p) || p.Kind != KindEntity {
-		return fmt.Errorf("%w: %s", ErrReservedPredicate, p)
-	}
-	po, _, err := encodeValue(w.ctx, w.q, p, true)
-	if err != nil {
-		return err
-	}
-	if sch.One {
-		if err := w.violations(po, "a.s = b.s AND a.o < b.o AND "+
-			"(a.v_from IS NULL OR b.v_to IS NULL OR a.v_from < b.v_to) AND "+
-			"(b.v_from IS NULL OR a.v_to IS NULL OR b.v_from < a.v_to)", "cardinality one"); err != nil {
-			return err
-		}
-	}
-	if sch.Unique {
-		if err := w.violations(po, "a.o = b.o AND a.s < b.s", "unique"); err != nil {
-			return err
-		}
-	}
-	card, uniq, err := w.schemaRows(po)
-	if err != nil {
-		return err
-	}
-	if err := w.setFlag(po, sch.One, card, sysPred(predCardinality), Str("one")); err != nil {
-		return err
-	}
-	return w.setFlag(po, sch.Unique, uniq, sysPred(predUnique), Bool(true))
-}
-
-func (w *KGTx) violations(p objectID, join, what string) error {
-	rows, err := w.q.QueryContext(w.ctx,
-		"SELECT a.eid, b.eid FROM kg_stmt a JOIN kg_stmt b ON a.p = b.p AND "+join+
-			" WHERE a.p = ? AND a.t_ret IS NULL AND b.t_ret IS NULL ORDER BY a.eid, b.eid LIMIT 10", p)
-	if err != nil {
-		return fmt.Errorf("palace: kg: schema violations: %w", err)
-	}
-	defer rows.Close()
-	var pairs []string
-	for rows.Next() {
-		var a, b int64
-		if err := rows.Scan(&a, &b); err != nil {
-			return fmt.Errorf("palace: kg: scan violations: %w", err)
-		}
-		pairs = append(pairs, fmt.Sprintf("e%d/e%d", a, b))
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	if len(pairs) > 0 {
-		return fmt.Errorf("%w: %s broken by %v", ErrSchemaViolation, what, pairs)
-	}
-	return nil
-}
-
-func (w *KGTx) setFlag(p objectID, want bool, current []int64, pred, val Value) error {
-	switch {
-	case want && len(current) == 0:
-		pp, _, err := w.engineOID(pred, true)
-		if err != nil {
-			return err
-		}
-		vo, _, err := encodeValue(w.ctx, w.q, val, true)
-		if err != nil {
-			return err
-		}
-		_, _, err = w.write(p, pp, vo, nil, nil, writeEngine)
-		return err
-	case !want:
-		for _, eid := range current {
-			if err := w.retract(eid, RetExplicit, RetCascade); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
 // --- retraction ---
 
 // Retract ends the belief in statement eid and, in the same transaction,
@@ -501,7 +323,7 @@ func (w *KGTx) Supersede(eid int64, patch Patch) (int64, error) {
 
 	newO := root.o
 	if patch.Object != nil {
-		if newO, _, err = encodeValue(w.ctx, w.q, *patch.Object, true); err != nil {
+		if newO, err = w.encodeObject(root.s, root.p, *patch.Object); err != nil {
 			return 0, err
 		}
 	}
@@ -685,9 +507,7 @@ func (w *KGTx) Derive(s, p, o Value, v Valid, support []int64) (int64, bool, err
 	if len(support) == 0 {
 		return 0, false, ErrNoSupport
 	}
-	sup := slices.Clone(support)
-	slices.Sort(sup)
-	sup = slices.Compact(sup)
+	sup := normalizeSupport(support)
 	supIDs := make([]objectID, len(sup))
 	for i, e := range sup {
 		supIDs[i] = makeOID(e, tagStmt)
@@ -732,6 +552,13 @@ func (w *KGTx) Derive(s, p, o Value, v Valid, support []int64) (int64, bool, err
 		}
 	}
 	return eid, true, nil
+}
+
+// normalizeSupport sorts and de-duplicates a support set.
+func normalizeSupport(support []int64) []int64 {
+	sup := slices.Clone(support)
+	slices.Sort(sup)
+	return slices.Compact(sup)
 }
 
 func (w *KGTx) findDerivation(s, p, o objectID, from, to *int64, derived objectID, sup []int64) (int64, error) {

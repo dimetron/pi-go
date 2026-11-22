@@ -26,6 +26,7 @@ const (
 	tagBool   = 6
 	tagTime   = 7
 	tagTx     = 8
+	tagSealed = 9 // kg_term row: "<subject oid>:<base64 iv||ciphertext>"
 )
 
 func makeOID(payload int64, tag int) objectID { return objectID(payload<<4 | int64(tag)) }
@@ -94,9 +95,20 @@ const (
 	predDerivedFrom = "sys:DerivedFrom"
 	predCardinality = "sys:Cardinality"
 	predUnique      = "sys:Unique"
+
+	predInGraph        = "sys:InGraph"
+	predValueType      = "sys:ValueType"
+	predSubjectType    = "sys:SubjectType"
+	predIsEdge         = "sys:IsEdge"
+	predSensitive      = "sys:Sensitive"
+	predRuleText       = "sys:RuleText"
+	predEmbeddingModel = "sys:EmbeddingModel"
 )
 
-var enginePredicates = []string{predSupersedes, predConfirmedBy, predDerivedFrom, predCardinality, predUnique}
+var enginePredicates = []string{
+	predSupersedes, predConfirmedBy, predDerivedFrom, predCardinality, predUnique,
+	predInGraph, predValueType, predSubjectType, predIsEdge, predSensitive, predRuleText, predEmbeddingModel,
+}
 
 func sysPred(name string) Value { return Value{Kind: KindEntity, Text: name} }
 
@@ -197,6 +209,12 @@ func encodeValue(ctx context.Context, q querier, v Value, create bool) (objectID
 	if v.Kind == KindEntity && strings.TrimSpace(lex) == "" {
 		return 0, false, errors.New("palace: kg: empty entity name")
 	}
+	return internTerm(ctx, q, tag, lex, num, create)
+}
+
+// internTerm returns the id of dictionary term (tag, lex), inserting it when
+// create is set.
+func internTerm(ctx context.Context, q querier, tag int, lex string, num *float64, create bool) (objectID, bool, error) {
 	var id int64
 	err := q.QueryRowContext(ctx, "SELECT id FROM kg_term WHERE tag = ? AND lex = ?", tag, lex).Scan(&id)
 	switch {
@@ -219,9 +237,10 @@ func encodeValue(ctx context.Context, q querier, v Value, create bool) (objectID
 // batches.
 type decoder struct {
 	terms map[int64]Value
+	keys  map[objectID][]byte // seal keys by data subject; nil = destroyed
 }
 
-func newDecoder() *decoder { return &decoder{terms: map[int64]Value{}} }
+func newDecoder() *decoder { return &decoder{terms: map[int64]Value{}, keys: map[objectID][]byte{}} }
 
 // load fetches every term the given ids reference that is not cached yet.
 func (d *decoder) load(ctx context.Context, q querier, ids []objectID) error {
@@ -229,7 +248,7 @@ func (d *decoder) load(ctx context.Context, q querier, ids []objectID) error {
 	seen := map[int64]bool{}
 	for _, o := range ids {
 		switch o.tag() {
-		case tagEntity, tagStr, tagNum:
+		case tagEntity, tagStr, tagNum, tagSealed:
 			id := o.payload()
 			if _, ok := d.terms[id]; !ok && !seen[id] {
 				seen[id] = true
@@ -239,6 +258,7 @@ func (d *decoder) load(ctx context.Context, q querier, ids []objectID) error {
 	}
 	for start := 0; start < len(need); start += chunkSize {
 		chunk := need[start:min(start+chunkSize, len(need))]
+		sealed := map[int64]string{}
 		rows, err := q.QueryContext(ctx,
 			"SELECT id, tag, lex, num FROM kg_term WHERE id IN ("+placeholders(len(chunk))+")", chunk...)
 		if err != nil {
@@ -261,12 +281,21 @@ func (d *decoder) load(ctx context.Context, q querier, ids []objectID) error {
 				d.terms[id] = Value{Kind: KindString, Text: lex}
 			case tagNum:
 				d.terms[id] = Value{Kind: KindNumber, Num: num.Float64}
+			case tagSealed:
+				sealed[id] = lex
 			}
 		}
 		err = rows.Err()
 		rows.Close()
 		if err != nil {
 			return fmt.Errorf("palace: kg: load terms: %w", err)
+		}
+		for id, lex := range sealed {
+			v, err := openSealed(ctx, q, lex, d.keys)
+			if err != nil {
+				return err
+			}
+			d.terms[id] = v
 		}
 	}
 	return nil

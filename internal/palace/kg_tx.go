@@ -80,6 +80,7 @@ type TxReport struct {
 	Existing   []int64        `json:"existing,omitempty"`
 	Retracted  []Retraction   `json:"retracted,omitempty"`
 	Superseded []Supersession `json:"superseded,omitempty"`
+	Erased     []string       `json:"erased,omitempty"`
 	DryRun     bool           `json:"dry_run,omitempty"`
 }
 

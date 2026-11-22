@@ -27,6 +27,9 @@ type View struct {
 	mode    viewMode
 	t       int64
 	validAt *int64
+	// graphs restricts reads to members of these named graphs; empty is the
+	// default graph, the union of everything.
+	graphs []string
 }
 
 // Now is the view of what is believed now.
@@ -79,6 +82,9 @@ func (v View) String() string {
 	}
 	if v.validAt != nil {
 		s += ", valid at " + time.UnixMilli(*v.validAt).UTC().Format(time.RFC3339)
+	}
+	if len(v.graphs) > 0 {
+		s += ", in graph " + strings.Join(v.graphs, "|")
 	}
 	return s
 }
@@ -248,13 +254,16 @@ func (v View) about(ctx context.Context, q querier, entity, direction string) ([
 	default:
 		where, args = "(st.s = ? OR st.o = ?)", []any{ent, ent}
 	}
-	cond, cargs := v.cond("st.")
+	cond, cargs, err := v.condQ(ctx, q, "st.")
+	if err != nil {
+		return nil, err
+	}
 	ef, eargs, err := engineFilter(ctx, q, "st.")
 	if err != nil {
 		return nil, err
 	}
 	args = append(append(args, cargs...), eargs...)
-	return queryStatements(ctx, q, "WHERE "+where+" AND "+cond+ef+" ORDER BY st.t_add, st.eid", args...)
+	return v.query(ctx, q, "WHERE "+where+" AND "+cond+ef+" ORDER BY st.t_add, st.eid", args...)
 }
 
 // Pattern selects statements by any of subject, predicate and object.
@@ -281,22 +290,80 @@ func (v View) match(ctx context.Context, q querier, p Pattern) ([]Statement, err
 	var (
 		where []string
 		args  []any
+		enc   = map[string]objectID{}
 	)
+	// A literal constant on a sensitive predicate is stored sealed under its
+	// subject's key: with a bound subject it is sealed the same way and looked
+	// up by id; otherwise the rows are filtered after decoding.
+	var postFilter *Value
+	objectSealed := false
+	if p.Predicate != nil && p.Object != nil && isLiteralKind(p.Object.Kind) {
+		po, ok, err := encodeValue(ctx, q, *p.Predicate, false)
+		if err != nil || !ok {
+			return nil, err
+		}
+		sens, err := isSensitive(ctx, q, po)
+		if err != nil {
+			return nil, err
+		}
+		objectSealed = sens
+	}
 	for _, f := range []struct {
-		col string
-		val *Value
-	}{{"st.s", p.Subject}, {"st.p", p.Predicate}, {"st.o", p.Object}} {
+		col, name string
+		val       *Value
+	}{{"st.s", "s", p.Subject}, {"st.p", "p", p.Predicate}, {"st.o", "o", p.Object}} {
 		if f.val == nil {
 			continue
+		}
+		if f.name == "o" && objectSealed {
+			s, hasS := enc["s"]
+			if !hasS {
+				postFilter = f.val
+				continue
+			}
+			o, ok, err := sealedLookup(ctx, q, s, *f.val)
+			if err != nil || !ok {
+				return nil, err
+			}
+			where = append(where, f.col+" = ?")
+			args = append(args, o)
+			continue
+		}
+		if f.name == "o" && p.Predicate == nil && isLiteralKind(f.val.Kind) {
+			// With the predicate free, a sensitive predicate may hold this
+			// value sealed: take the sealed candidates too and compare them
+			// after decoding.
+			anySealed, err := hasSealedTerms(ctx, q)
+			if err != nil {
+				return nil, err
+			}
+			if anySealed {
+				o, ok, err := encodeValue(ctx, q, *f.val, false)
+				if err != nil {
+					return nil, err
+				}
+				if ok {
+					where = append(where, "(st.o = ? OR (st.o & 15) = 9)")
+					args = append(args, o)
+				} else {
+					where = append(where, "(st.o & 15) = 9")
+				}
+				postFilter = f.val
+				continue
+			}
 		}
 		o, ok, err := encodeValue(ctx, q, *f.val, false)
 		if err != nil || !ok {
 			return nil, err
 		}
+		enc[f.name] = o
 		where = append(where, f.col+" = ?")
 		args = append(args, o)
 	}
-	cond, cargs := v.cond("st.")
+	cond, cargs, err := v.condQ(ctx, q, "st.")
+	if err != nil {
+		return nil, err
+	}
 	where = append(where, cond)
 	args = append(args, cargs...)
 	clause := "WHERE " + strings.Join(where, " AND ")
@@ -309,10 +376,23 @@ func (v View) match(ctx context.Context, q querier, p Pattern) ([]Statement, err
 		args = append(args, eargs...)
 	}
 	clause += " ORDER BY st.t_add, st.eid"
-	if p.Limit > 0 {
+	if p.Limit > 0 && postFilter == nil {
 		clause += fmt.Sprintf(" LIMIT %d", p.Limit)
 	}
-	return queryStatements(ctx, q, clause, args...)
+	sts, err := v.query(ctx, q, clause, args...)
+	if err != nil || postFilter == nil {
+		return sts, err
+	}
+	out := sts[:0]
+	for _, st := range sts {
+		if st.Object == *postFilter {
+			out = append(out, st)
+			if p.Limit > 0 && len(out) == p.Limit {
+				break
+			}
+		}
+	}
+	return out, nil
 }
 
 // Get returns statement eid whatever its state, or nil when it does not exist.
@@ -516,4 +596,84 @@ func (kg *KnowledgeGraph) Events(ctx context.Context, since, until int64) ([]Eve
 		return rows.Err()
 	})
 	return out, err
+}
+
+// mask hides what happened after an AsOf bound: a statement retracted later
+// than the view's transaction is shown as live, so a historical row never
+// changes when the future is written.
+func (v View) mask(sts []Statement) []Statement {
+	if v.mode != viewAsOf {
+		return sts
+	}
+	for i := range sts {
+		if sts[i].TRet != nil && *sts[i].TRet > v.t {
+			sts[i].TRet, sts[i].RetKind, sts[i].RetractedAt = nil, nil, nil
+		}
+	}
+	return sts
+}
+
+// query runs queryStatements and masks the rows for the view.
+func (v View) query(ctx context.Context, q querier, where string, args ...any) ([]Statement, error) {
+	sts, err := queryStatements(ctx, q, where, args...)
+	return v.mask(sts), err
+}
+
+// condQ is cond plus the view's graph restriction: a statement is visible
+// when it, or the statement it is about (one layer up), has a membership in
+// one of the graphs that the same view selects.
+func (v View) condQ(ctx context.Context, q querier, alias string) (string, []any, error) {
+	c, args := v.cond(alias)
+	if len(v.graphs) == 0 {
+		return c, args, nil
+	}
+	in, ok, err := encodeValue(ctx, q, sysPred(predInGraph), false)
+	if err != nil {
+		return "", nil, err
+	}
+	var gs []any
+	if ok {
+		for _, g := range v.graphs {
+			o, found, err := encodeValue(ctx, q, Ent(g), false)
+			if err != nil {
+				return "", nil, err
+			}
+			if found {
+				gs = append(gs, o)
+			}
+		}
+	}
+	if len(gs) == 0 {
+		return c + " AND 0", args, nil
+	}
+	mc, margs := v.cond("m.")
+	sub := " AND EXISTS (SELECT 1 FROM kg_stmt m WHERE m.p = ? AND m.o IN (" + placeholders(len(gs)) + ")" +
+		" AND (m.s = ((" + alias + "eid << 4) | 2) OR ((" + alias + "s & 15) = 2 AND m.s = " + alias + "s))" +
+		" AND " + mc + ")"
+	args = append(append(append(args, in), gs...), margs...)
+	return c + sub, args, nil
+}
+
+// InGraph restricts v to the members of the named graphs (any of them).
+func (v View) InGraph(graphs ...string) View {
+	v.graphs = nil
+	for _, g := range graphs {
+		if g = strings.TrimSpace(g); g != "" {
+			v.graphs = append(v.graphs, entityID(g))
+		}
+	}
+	return v
+}
+
+// Graphs reports the graph restriction of v.
+func (v View) Graphs() []string { return slices.Clone(v.graphs) }
+
+// hasSealedTerms reports whether any sealed value exists.
+func hasSealedTerms(ctx context.Context, q querier) (bool, error) {
+	var n int
+	err := q.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM kg_term WHERE tag = ?)", tagSealed).Scan(&n)
+	if err != nil {
+		return false, fmt.Errorf("palace: kg: sealed terms: %w", err)
+	}
+	return n == 1, nil
 }

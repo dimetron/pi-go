@@ -21,24 +21,24 @@ Upstream references are under `tmp/tiramemsu/lat.md/` and
 | 9 | Retract with cascade (statement subjects/objects, visited set, `max_cascade`) | `time-model.md#Cascade`, `retraction-cascade` | None | **Port** |
 | 10 | Supersede: retract cascade set, replay layers on new eids with σ, patch root, `sys:supersedes` lineage | `time-model.md#Supersede`, `supersede` | `Invalidate` overwrites `valid_to` | **Port.** `Invalidate` becomes supersede with `v_to = now` |
 | 11 | Confirm: `(eid sys:confirmedBy tx)` | `time-model.md#Confirm` | None | **Port** |
-| 12 | Derived beliefs: `derive(s,p,o, support)`, conjunctive support, falls with any support, supersede drops derived dependents | `derived-beliefs.md`, `derived-beliefs` | None | **Port** (D45–D48). Derived upsert (D51) and widening (D52) deferred |
-| 13 | Predicate schema: `sys:cardinality one`, `sys:unique` | `data-model.md#Predicate Schema`, `predicate-schema` | None | **Adapt:** `one` and `unique` only. `valueType`, `subjectType`, `isEdge` deferred |
+| 12 | Derived beliefs: `derive(s,p,o, support)`, conjunctive support, falls with any support, supersede drops derived dependents | `derived-beliefs.md`, `derived-beliefs` | None | **Port** (D45–D48); derived upsert (D51) and widening (D52) in phase 2 |
+| 13 | Predicate schema: `sys:cardinality one`, `sys:unique` | `data-model.md#Predicate Schema`, `predicate-schema` | None | **Port** (phase 2 adds `valueType`, `subjectType`, `isEdge`, `sensitive`, unique upsert) |
 | 14 | Dependents: what a retraction would take with it, read-only, any view | `time-model.md#Dependents`, `statement-dependents` | None | **Port** |
 | 15 | Event log view `event(t, eid, op, kind)` | `storage.md#Event View` | None | **Port** as a SQL view + `Events(since)` |
 | 16 | Conflict review: same s,p, distinct o, overlapping valid time, with evidence | `memory-conflict-review` | None | **Port** (evidence = confidence, sources, confirmations, tx author) |
 | 17 | Text recall over string values, view-aware | `text-retrieval`, `storage.md#Text Index` | Drawers have FTS5; KG has none | **Adapt:** FTS5 over entity names and string literals in `kg_term`; hits filtered by view |
 | 18 | Dry run (`TxOptions.dry_run`) | `speculative-transactions` | None | **Port** (rollback; burned ids not guaranteed, see design) |
-| 19 | Named graphs as `sys:inGraph` layers | `named-graphs` | Wings/rooms exist for drawers only | **Defer.** A plain `session` / `source` layer covers the agent need |
-| 20 | Fact bundles (export a fact with its layers, idempotent import) | `fact-bundles` | None | **Defer** |
-| 21 | Volatile table | `storage.md#Volatile Table` | None | **Defer** |
-| 22 | SPARQL, openCypher, logical IR, planner | `sparql-*`, `cypher-*`, `query-ir` | None | **Defer** (typed Go API and tools instead) |
-| 23 | Paths / time-respecting paths | `path-*`, `temporal-language-paths` | Room BFS in `graph.go` | **Defer** |
-| 24 | Datalog, N3, ELPI reasoning and constraints | `datalog-*`, `n3-*`, `elpi-*` | None | **Defer** |
-| 25 | Saved answers with invalidation | `saved-answer-invalidation` | None | **Defer** |
-| 26 | Statement vectors / hybrid recall | `vector-retrieval`, `hybrid-recall` | Drawers have embeddings | **Defer** |
+| 19 | Named graphs as `sys:inGraph` layers | `named-graphs` | Wings/rooms exist for drawers only | **Port** (phase 2): `sys:InGraph` membership layers, `View.InGraph`, `palace-kg-graph` |
+| 20 | Fact bundles (export a fact with its layers, idempotent import) | `fact-bundles` | None | **Port** (phase 2): JSON bundles; N-Triples form not ported |
+| 21 | Volatile table | `storage.md#Volatile Table` | None | **Port** (phase 2) |
+| 22 | SPARQL, openCypher, logical IR, planner | `sparql-*`, `cypher-*`, `query-ir` | None | **Adapt** (phase 2): one Go IR with SPARQL and read-only Cypher subsets; out-of-subset constructs are rejected before execution |
+| 23 | Paths / time-respecting paths | `path-*`, `temporal-language-paths` | Room BFS in `graph.go` | **Port** (phase 2): reach, shortest, all shortest, trails, time-respecting |
+| 24 | Datalog, N3, ELPI reasoning and constraints | `datalog-*`, `n3-*`, `elpi-*` | None | **Port** (phase 2): stratified Datalog with constraints and materialization, N3 Horn subset, ELPI Horn subset with fuel |
+| 25 | Saved answers with invalidation | `saved-answer-invalidation` | None | **Port** (phase 2) |
+| 26 | Statement vectors / hybrid recall | `vector-retrieval`, `hybrid-recall` | Drawers have embeddings | **Port** (phase 2): exact cosine, RRF hybrid recall |
 | 27 | redb engine, WASM host, bindings, MCP server, CLI `tm` | `redb-storage`, `wasm-sqlite-host`, ... | n/a | **Not applicable** |
-| 28 | Crypto-shredding erasure | `time-model.md#Erasure` | None | **Defer** |
-| 29 | Query budgets | `query-budgets` | None | **Adapt:** only `max_cascade`; reads are bounded by `limit` |
+| 28 | Crypto-shredding erasure | `time-model.md#Erasure` | None | **Port** (phase 2): per-subject keys, deterministic AES-GCM SIV, `pi memory kg erase` |
+| 29 | Query budgets | `query-budgets` | None | **Port** (phase 2): operation-wide row/byte budgets, context cancellation |
 
 ## What the palace gains, in agent terms
 
