@@ -262,14 +262,27 @@ jobs:
           new_tree="$(jq -n -c --arg base "$base_tree" --argjson entries "$entries" \
             '{base_tree: $base, tree: $entries}' \
             | gh api --method POST "repos/$GH_REPO/git/trees" --input - --jq .sha)"
-          # Creating the commit as the token's own identity (no author or
-          # committer override) is what makes GitHub sign it. Supplying either
-          # one would drop the signature and the commit would be unmergeable.
+          # Creating the commit as the token's own identity — no author, no
+          # committer — is what makes GitHub sign it. Supplying either one drops
+          # the signature. Confirmed by experiment: the same commit payload with
+          # no author came back signed-capable, with an explicit author it came
+          # back verification.verified=false.
           #
-          # The trailer is not decoration: .githooks/pre-push hard-fails any
-          # commit without a Signed-off-by naming its committer, because
-          # AGENTS.md mandates `git commit -s -S`. The bot is its own committer,
-          # so it signs off as itself.
+          # The Signed-off-by trailer is not decoration. The DCO app, which runs
+          # on every PR here, compares each commit's trailer against that
+          # commit's AUTHOR EMAIL — not its author name, and not its committer.
+          # Measured directly on this repository:
+          #   author github-actions[bot] <41898282+...@users.noreply.github.com>
+          #     + trailer naming the same address  -> DCO pass
+          #   author Dmytro Rashko <dimetron@me.com>
+          #     + trailer naming github-actions[bot] -> DCO fail
+          #   author Dmytro Rashko <dimetron@me.com>
+          #     + trailer 877433+dimetron@users.noreply.github.com -> DCO fail
+          # Under GITHUB_TOKEN the author email IS the bot's noreply address
+          # below, so the hardcoded trailer matches. Under a personal access
+          # token it would not — but then the commit is also unsigned, which
+          # required_signatures already rejects, so that configuration cannot
+          # merge no matter what the trailer says.
           new_commit="$(jq -n -c \
             --arg msg "Refresh model list
 

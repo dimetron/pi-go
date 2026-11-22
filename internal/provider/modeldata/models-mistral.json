@@ -1,6 +1,6 @@
 {
   "provider": "mistral",
-  "fetched_at": "2026-11-14T00:00:00Z",
+  "fetched_at": "2026-11-22T00:00:00Z",
   "models": [
     {
       "id": "codestral-2508",
@@ -43,27 +43,6 @@
       "capabilities": [
         "completion_chat",
         "function_calling"
-      ]
-    },
-    {
-      "id": "labs-leanstral-1-5",
-      "owned_by": "mistralai",
-      "context_window": 262144,
-      "capabilities": [
-        "completion_chat",
-        "function_calling",
-        "vision"
-      ]
-    },
-    {
-      "id": "labs-leanstral-1-5-1",
-      "owned_by": "mistralai",
-      "release_date": "2026-06-30",
-      "context_window": 262144,
-      "capabilities": [
-        "completion_chat",
-        "function_calling",
-        "vision"
       ]
     },
     {
@@ -215,7 +194,7 @@
     {
       "id": "mistral-large-latest",
       "owned_by": "mistralai",
-      "release_date": "2024-11-01",
+      "release_date": "2026-10-06",
       "context_window": 1048576,
       "capabilities": [
         "completion_chat",

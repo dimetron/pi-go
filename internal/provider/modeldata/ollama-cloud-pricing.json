@@ -1,5 +1,5 @@
 {
- "fetched_at": "2026-11-14T00:00:00Z",
+ "fetched_at": "2026-11-22T00:00:00Z",
  "models": {
   "beam": {
    "cache_read": 0.015,
@@ -45,6 +45,11 @@
    "cache_read": 0.035,
    "input": 0.07,
    "output": 0.3
+  },
+  "hy4": {
+   "cache_read": 0.042,
+   "input": 0.834,
+   "output": 2.501
   },
   "inkling-2-small": {
    "cache_read": 0.03,
