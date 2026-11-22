@@ -7,6 +7,7 @@ import (
 	"github.com/dimetron/pi-go/internal/config"
 	"github.com/dimetron/pi-go/internal/extension"
 	"github.com/dimetron/pi-go/internal/logger"
+	"github.com/dimetron/pi-go/internal/provider"
 	pisession "github.com/dimetron/pi-go/internal/session"
 	"github.com/dimetron/pi-go/internal/subagent"
 	"github.com/dimetron/pi-go/internal/tools"
@@ -103,6 +104,19 @@ type Config struct {
 	// wrapped LLM, resolved model name, and provider. Used by /model <name>.
 	// If nil, model switching via /model is disabled.
 	ModelSwitcher func(ctx context.Context, modelName string) (llmmodel.LLM, string, string, error)
+
+	// ProviderModelSwitcher is ModelSwitcher with the provider named rather
+	// than detected from the model name, for /model switch rows: a listed
+	// model ID such as "llama3" says nothing about who serves it. If nil,
+	// /model switch is disabled.
+	ProviderModelSwitcher func(ctx context.Context, modelName, providerName string) (llmmodel.LLM, string, string, error)
+
+	// ModelLister lists the models a provider serves, for /model switch.
+	ModelLister func(ctx context.Context, providerName string) ([]provider.ModelInfo, error)
+
+	// ModelProviders returns the providers /model provider offers: those with
+	// credentials or an endpoint configured.
+	ModelProviders func() []string
 }
 
 // InitEvent reports progress from deferred initialization.

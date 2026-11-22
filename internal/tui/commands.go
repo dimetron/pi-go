@@ -14,6 +14,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	llmmodel "google.golang.org/adk/v2/model"
 )
 
 func (m *model) handleSlashCommand(input string) (tea.Model, tea.Cmd) {
@@ -98,7 +99,7 @@ var slashCommandSpecs = []slashCommandSpec{
 	{name: "/help", desc: "Show help", run: slashCmdVoid((*model).showHelpMessage)},
 	{name: "/clear", desc: "Clear conversation", run: slashCmdVoid((*model).clearConversation)},
 	{name: "/copy", desc: "Copy conversation to clipboard", run: slashCmdBare((*model).handleCopyCommand)},
-	{name: "/model", desc: "Show or switch model", run: (*model).handleModelCommand},
+	{name: "/model", desc: "Show or switch model (switch [provider], provider)", run: (*model).handleModelCommand},
 	{name: "/session", desc: "Show session info", run: slashCmdVoid((*model).showSessionMessage)},
 	{name: "/context", desc: "Show context usage", run: slashCmdVoid((*model).showContextMessage)},
 	{name: "/branch", desc: "Manage branches", run: slashCmdArgs((*model).handleBranchCommand)},
@@ -526,14 +527,32 @@ func (m *model) formatModelInfo() string {
 }
 
 // handleModelCommand handles /model: show current model, switch model, or switch role.
-//   - /model           — show current model and configured roles
+//   - /model           — pick a role or one of the current provider's models
+//     (roles only when the provider cannot be listed)
 //   - /model <name>    — switch to the named model (or role if name matches a role)
+//   - /model switch [provider] — pick from the models the provider serves
+//     (the current provider by default)
+//   - /model provider  — pick a configured provider, then one of its models
 func (m *model) handleModelCommand(args []string) (tea.Model, tea.Cmd) {
+	if len(args) > 0 {
+		switch args[0] {
+		case "switch":
+			return m.handleModelSwitchCommand(args[1:])
+		case "provider", "providers":
+			return m.handleModelProviderCommand()
+		}
+	}
 	if len(args) == 0 {
 		// A second bare /model closes the picker, matching /theme and /subagents.
-		if m.searchPopup != nil && m.searchPopup.mode == searchModeModels {
+		if m.searchPopup != nil && (m.searchPopup.mode == searchModeModels || m.searchPopup.mode == searchModeProviderModels) {
 			m.searchPopup = nil
 			return m, nil
+		}
+		// With a live listing available, show the roles and then every model
+		// the current provider serves; a roles-only picker is one row for the
+		// common config that has just a default role.
+		if m.canListProviderModels() {
+			return m, m.startModelList(m.cfg.ProviderName, true)
 		}
 		// With no configured roles there is nothing to pick from, so fall back
 		// to the informational text rather than opening an empty popup.
@@ -601,6 +620,12 @@ func (m *model) switchModelTarget(target string) {
 		return
 	}
 
+	m.applySwitchedModel(newLLM, newName, newProvider, roleName)
+}
+
+// applySwitchedModel rebuilds the agent on a newly built LLM, updates the TUI
+// state, persists a non-role switch as the default, and reports the outcome.
+func (m *model) applySwitchedModel(newLLM llmmodel.LLM, newName, newProvider, roleName string) {
 	// Rebuild the agent with the new LLM.
 	if m.cfg.Agent != nil {
 		if err := m.cfg.Agent.RebuildWithModel(newLLM); err != nil {

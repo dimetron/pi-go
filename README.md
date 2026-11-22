@@ -367,7 +367,7 @@ reconstruct the text; that is how every consumer uses it.
 | Command         | Description                                              |
 |-----------------|----------------------------------------------------------|
 | `/help`         | Show available commands                                  |
-| `/model`        | Switch model mid-conversation                            |
+| `/model`        | Switch model or role mid-conversation; `/model switch [provider]` picks from a provider's live model list, `/model provider` picks the provider first |
 | `/session`      | List and switch sessions                                 |
 | `/branch`       | Create a conversation branch                             |
 | `/commit`       | Generate and apply a git commit                          |

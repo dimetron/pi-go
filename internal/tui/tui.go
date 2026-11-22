@@ -214,6 +214,13 @@ type model struct {
 
 	// Unified search popup for slash commands and history.
 	searchPopup *searchPopupState
+	// popupCmd is a command a popup selection started (a provider row's model
+	// fetch). handleSearchPopupKey cannot return one, so the key dispatcher
+	// drains it with takePopupCmd.
+	popupCmd tea.Cmd
+	// providerModelsFor names the provider the provider-models popup lists,
+	// for its header.
+	providerModelsFor string
 
 	// Legacy selection index for slash commands (used in tests).
 	slashCommandSelected int
@@ -369,7 +376,12 @@ const (
 	searchModeAgents   searchMode = "agents"
 	searchModeThemes   searchMode = "themes"
 	searchModeModels   searchMode = "models"
-	searchModeTimeline searchMode = "timeline"
+	// searchModeProviders lists configured providers; accepting one fetches
+	// that provider's models into a searchModeProviderModels popup.
+	searchModeProviders searchMode = "providers"
+	// searchModeProviderModels lists the models one provider serves.
+	searchModeProviderModels searchMode = "provider-models"
+	searchModeTimeline       searchMode = "timeline"
 )
 
 // SearchItem represents an item in the search popup (command, history entry, or
@@ -392,6 +404,14 @@ type SearchItem struct {
 	// Icon is a leading glyph for rows whose meaning is visual rather than
 	// textual — a theme's light/dark variant. Empty rows get the plain prefix.
 	Icon string
+	// Provider is set on searchModeProviderModels rows: the provider the row's
+	// model is served by, so accepting it routes there instead of guessing the
+	// provider from the model name.
+	Provider string
+	// Role marks a configured-role row in the provider-models popup, which
+	// bare /model fills with roles ahead of the live list. Accepting it
+	// switches role rather than model.
+	Role bool
 }
 
 // searchPopupChrome is the number of rows the search popup reserves for chrome
@@ -497,24 +517,7 @@ func (m *model) newSearchPopup(mode searchMode) {
 		}
 	}
 
-	availableRows := m.messageViewportHeight()
-	// The overlay leaves a 1-row margin between the popup and the bottom of
-	// the viewport when the popup fits.  Reserve that row too so the chrome
-	// does not push the last item into that margin.
-	if availableRows > 0 {
-		availableRows--
-	}
-	popupHeight := searchPopupListHeight(len(items), availableRows)
-
-	m.searchPopup = &searchPopupState{
-		mode:      mode,
-		entries:   items,
-		filtered:  items,
-		selected:  0,
-		search:    "",
-		height:    popupHeight,
-		scrollOff: 0,
-	}
+	m.openSearchPopupItems(mode, items)
 
 	// A previewing picker captures what to revert to before it changes
 	// anything. Captured at open, not per keystroke.
@@ -533,6 +536,30 @@ func (m *model) newSearchPopup(mode searchMode) {
 			originalBgDetected: m.bgDetected,
 		}
 		m.previewThemeSelection()
+	}
+}
+
+// openSearchPopupItems opens the popup in mode over items that were built by
+// the caller. Pickers whose rows come from an async fetch (provider models)
+// cannot be built inside newSearchPopup, so they share this sizing instead.
+func (m *model) openSearchPopupItems(mode searchMode, items []SearchItem) {
+	availableRows := m.messageViewportHeight()
+	// The overlay leaves a 1-row margin between the popup and the bottom of
+	// the viewport when the popup fits.  Reserve that row too so the chrome
+	// does not push the last item into that margin.
+	if availableRows > 0 {
+		availableRows--
+	}
+	popupHeight := searchPopupListHeight(len(items), availableRows)
+
+	m.searchPopup = &searchPopupState{
+		mode:      mode,
+		entries:   items,
+		filtered:  items,
+		selected:  0,
+		search:    "",
+		height:    popupHeight,
+		scrollOff: 0,
 	}
 }
 
@@ -1255,6 +1282,9 @@ func (m *model) updateSession(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	case modelPriceRefreshDoneMsg:
 		model, cmd := m.handleModelPriceRefreshDone(msg)
 		return model, cmd, true
+	case providerModelsMsg:
+		model, cmd := m.handleProviderModels(msg)
+		return model, cmd, true
 	}
 	return nil, nil, false
 }
@@ -1745,7 +1775,7 @@ func (m *model) handleToggleKey(key tea.Key) (tea.Model, tea.Cmd, bool) {
 
 	// Unified search popup keys (slash commands or history).
 	if m.handleSearchPopupKey(key) {
-		return m, nil, true
+		return m, m.takePopupCmd(), true
 	}
 
 	// Ctrl+H: open history search popup (reverse-i-search style). With no
@@ -1827,7 +1857,7 @@ func (m *model) handleInputKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		switch key.Code {
 		case tea.KeyTab, tea.KeyUp, tea.KeyDown:
 			if m.handleSearchPopupKey(key) {
-				return m, nil
+				return m, m.takePopupCmd()
 			}
 		}
 	}
@@ -1974,6 +2004,18 @@ func (m *model) acceptSearchPopupSelection() {
 	case searchModeModels:
 		m.searchPopup = nil
 		m.switchModelTarget(item.Text)
+	case searchModeProviderModels:
+		m.searchPopup = nil
+		if item.Role {
+			m.switchModelTarget(item.Text)
+			break
+		}
+		m.switchModelOnProvider(item.Text, item.Provider)
+	case searchModeProviders:
+		m.searchPopup = nil
+		// Fetching is async, and this path has no tea.Cmd to return, so the
+		// key dispatcher picks the command up from popupCmd.
+		m.popupCmd = m.startProviderModelList(item.Text)
 	case searchModeTimeline:
 		m.searchPopup = nil
 		m.jumpToMessage(item.MessageIdx)
@@ -3079,8 +3121,10 @@ func (m *model) renderSearchPopup(width int) string {
 			b.WriteString(st.searchStyle.Width(width).Render("  No matching subagents"))
 		case searchModeThemes:
 			b.WriteString(st.searchStyle.Width(width).Render("  No matching themes"))
-		case searchModeModels:
+		case searchModeModels, searchModeProviderModels:
 			b.WriteString(st.searchStyle.Width(width).Render("  No matching models"))
+		case searchModeProviders:
+			b.WriteString(st.searchStyle.Width(width).Render("  No matching providers"))
 		case searchModeTimeline:
 			b.WriteString(st.searchStyle.Width(width).Render("  No matching turns"))
 		default:
@@ -3141,6 +3185,14 @@ func (m *model) searchPopupStyles(mode searchMode, width int) searchPopupStyleSe
 		accent = m.palette.Green
 		st.itemStyle = st.itemStyle.Foreground(m.palette.Green)
 		st.header = "Models"
+	case searchModeProviderModels:
+		accent = m.palette.Green
+		st.itemStyle = st.itemStyle.Foreground(m.palette.Green)
+		st.header = "Models · " + m.providerModelsFor
+	case searchModeProviders:
+		accent = m.palette.Teal
+		st.itemStyle = st.itemStyle.Foreground(m.palette.Teal)
+		st.header = "Providers"
 	case searchModeTimeline:
 		accent = m.palette.Blue
 		st.itemStyle = st.itemStyle.Foreground(m.palette.Blue)

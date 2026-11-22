@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"iter"
 	"log/slog"
-	"maps"
 	"net/http"
 	_ "net/http/pprof" // registers pprof HTTP handlers on /debug/pprof
 	"os"
@@ -1217,20 +1216,7 @@ func dispatchMode(ctx context.Context, mode, prompt string, ag *agent.Agent, ses
 			Log:       sessionLog,
 			Model:     modelName,
 			ModelSwitcher: func(switchCtx context.Context, name, providerHint string) (adkmodel.LLM, string, string, error) {
-				// buildSwitchedLLM seeds the provider from the default role
-				// and then overrides detection with it, so a stale pin would
-				// route e.g. an OpenAI model through Ollama. Substitute the
-				// provider the ACP client named; when it names none, clearing
-				// the pin lets pi-go detect from the model name.
-				switchCfg := cfg
-				switchCfg.Roles = maps.Clone(cfg.Roles)
-				if switchCfg.Roles == nil {
-					switchCfg.Roles = map[string]config.RoleConfig{}
-				}
-				rc := switchCfg.Roles["default"]
-				rc.Provider = providerHint
-				switchCfg.Roles["default"] = rc
-				return buildSwitchedLLM(switchCtx, switchCfg, tokenTracker, name)
+				return buildSwitchedLLMForProvider(switchCtx, cfg, tokenTracker, name, providerHint)
 			},
 		}).Run(ctx)
 	}

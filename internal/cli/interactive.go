@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -189,6 +191,15 @@ func runInteractive(
 		SystemNoticeCh: noticeCh,
 		ModelSwitcher: func(switchCtx context.Context, modelName string) (adkmodel.LLM, string, string, error) {
 			return buildSwitchedLLM(switchCtx, cfg, tokenTracker, modelName)
+		},
+		ProviderModelSwitcher: func(switchCtx context.Context, modelName, providerName string) (adkmodel.LLM, string, string, error) {
+			return buildSwitchedLLMForProvider(switchCtx, cfg, tokenTracker, modelName, providerName)
+		},
+		ModelLister: func(listCtx context.Context, providerName string) ([]provider.ModelInfo, error) {
+			return listProviderModels(listCtx, cfg, providerName)
+		},
+		ModelProviders: func() []string {
+			return configuredListProviders(config.APIKeys(), cfg.ResolveBaseURLs())
 		},
 		A2A: cfg.A2A,
 	})
@@ -1101,6 +1112,64 @@ func buildSwitchedLLM(ctx context.Context, cfg config.Config, tokenTracker *guar
 	llm = guardrail.WrapModel(llm, tokenTracker)
 
 	return llm, switchedModelName(info), info.Provider, nil
+}
+
+// buildSwitchedLLMForProvider is buildSwitchedLLM with the provider named by
+// the caller instead of pinned by the default role.
+//
+// buildSwitchedLLM seeds the provider from the default role and then overrides
+// detection with it, so a stale pin would route e.g. an OpenAI model through
+// Ollama. Substitute the provider the caller named; when it names none,
+// clearing the pin lets pi-go detect from the model name.
+func buildSwitchedLLMForProvider(ctx context.Context, cfg config.Config, tokenTracker *guardrail.Tracker, modelName, providerName string) (adkmodel.LLM, string, string, error) {
+	switchCfg := cfg
+	switchCfg.Roles = maps.Clone(cfg.Roles)
+	if switchCfg.Roles == nil {
+		switchCfg.Roles = map[string]config.RoleConfig{}
+	}
+	rc := switchCfg.Roles["default"]
+	rc.Provider = providerName
+	switchCfg.Roles["default"] = rc
+	return buildSwitchedLLM(ctx, switchCfg, tokenTracker, routedModelName(modelName, providerName))
+}
+
+// routedModelPrefixes are the providers whose "<provider>/" prefix model
+// resolution strips. A listed ID is the provider's own name for the model, so
+// it has to keep every segment: agentgateway and openrouter serve IDs such as
+// "openai/gpt-5", which resolution would otherwise read as native OpenAI and
+// cut to "gpt-5" before the pin swaps the provider back.
+var routedModelPrefixes = []string{"agentgateway", "openrouter", "opencode", "ollama", "openai", "azure", "mistral", "anthropic", "fm"}
+
+// routedModelName prefixes modelName with "<providerName>/" when resolution
+// knows that prefix and the name does not already carry it, so the provider
+// receives the ID verbatim.
+func routedModelName(modelName, providerName string) string {
+	if !slices.Contains(routedModelPrefixes, providerName) {
+		return modelName
+	}
+	prefix := providerName + "/"
+	if strings.HasPrefix(strings.ToLower(modelName), prefix) {
+		return modelName
+	}
+	return prefix + modelName
+}
+
+// listProviderModels lists the models one provider serves, for the TUI's
+// /model switch picker: the same query, endpoint resolution and filtering as
+// `pi model list <provider>`, sorted newest first.
+func listProviderModels(ctx context.Context, cfg config.Config, providerName string) ([]provider.ModelInfo, error) {
+	opts := provider.ListModelsOptions{
+		APIKey:   config.APIKeys()[providerName],
+		Insecure: flagInsecure,
+		BaseURL:  modelListBaseURL(providerName, cfg.ResolveBaseURLs()),
+	}
+	models, err := provider.ListModels(ctx, providerName, opts)
+	if err != nil {
+		return nil, err
+	}
+	models = enrichAndFilterModels(providerName, models)
+	sortModelsNewestFirst(models)
+	return models, nil
 }
 
 // resolveSwitchedModel resolves modelName to a validated model info plus the
