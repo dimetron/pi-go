@@ -436,6 +436,27 @@ func TestKGAsOfMasksLaterRetraction(t *testing.T) {
 	if ex, _ := kg.AsOf(t1).Explain(ctx, e); ex.Statement.TRet != nil {
 		t.Fatal("explain as-of shows a later retraction")
 	}
+	// Explain carries the retraction twice: on the statement, and as the
+	// RetractedBy transaction the tool renders as "- Withdrawn: txN". Both must
+	// describe the view's instant, or the tool prints "- Status: live" directly
+	// above "- Withdrawn: txN".
+	at := t1
+	ex, err := kg.AsOf(at).Explain(ctx, e)
+	if err != nil || ex == nil {
+		t.Fatalf("Explain: %v", err)
+	}
+	if ex.RetractedBy != nil {
+		t.Errorf("as-of tx%d: RetractedBy = tx%d, a retraction that had not happened yet (the row is masked, so this contradicts Status)",
+			at, ex.RetractedBy.T)
+	}
+	// The now view must still report the retraction, or the fix hides a real one.
+	now, err := kg.Now().Explain(ctx, e)
+	if err != nil || now == nil {
+		t.Fatalf("Explain now: %v", err)
+	}
+	if now.RetractedBy == nil {
+		t.Error("now view lost the retraction")
+	}
 }
 
 func lastTOf(kg *KnowledgeGraph) (int64, error) {

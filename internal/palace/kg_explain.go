@@ -191,8 +191,12 @@ func (v View) Explain(ctx context.Context, eid int64) (*Explanation, error) {
 		if ex.AddedBy, err = loadTx(ctx, q, st.TAdd); err != nil {
 			return err
 		}
-		if st.TRet != nil {
-			if ex.RetractedBy, err = loadTx(ctx, q, *st.TRet); err != nil {
+		// RetractedBy must agree with the statement it explains. ex.Statement is
+		// the masked copy, so deriving the retraction from the raw st.TRet made an
+		// as-of view report both "- Status: live" and "- Withdrawn: txN" for a
+		// retraction that had not happened at the bound yet.
+		if ex.Statement.TRet != nil {
+			if ex.RetractedBy, err = loadTx(ctx, q, *ex.Statement.TRet); err != nil {
 				return err
 			}
 		}
