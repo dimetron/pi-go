@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"google.golang.org/adk/v2/model"
+	"google.golang.org/genai"
 )
 
 func TestNewAgentGateway(t *testing.T) {
@@ -458,4 +461,172 @@ func TestNewAgentGatewayGeminiRoute(t *testing.T) {
 			t.Errorf("expected *openaiModel for an ollama route, got %T", llm)
 		}
 	})
+}
+
+// TestAgentGatewayGeminiLayeredNameEscapesTheWirePath is the regression test for
+// a layered gateway Gemini route answering 404.
+//
+// A gateway route named gemini/<id> — the shape its own pi-fast failover uses —
+// reaches the native client as "gemini/<id>". The genai SDK pastes the model
+// into the URL path without escaping, so the slash split the request into an
+// extra segment: /v1beta/models/gemini/gemini-4-neon:generateContent. The
+// gateway has no route for that and answered 404 with an empty body — no
+// message, no model name, nothing pointing at the slash.
+//
+// The assertion is on r.URL.EscapedPath() rather than r.URL.Path because the
+// distinction IS the bug: Go's URL keeps the raw %2F in RawPath while Path
+// decodes it back to "/", so a test reading Path cannot tell the two requests
+// apart.
+func TestAgentGatewayGeminiLayeredNameEscapesTheWirePath(t *testing.T) {
+	var gotPath string
+	var gotEscapedPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotEscapedPath = r.URL.EscapedPath()
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"candidates": []map[string]any{{
+				"content": map[string]any{
+					"role":  "model",
+					"parts": []map[string]any{{"text": "hi"}},
+				},
+			}},
+		})
+	}))
+	defer srv.Close()
+
+	llm, err := NewAgentGateway(context.Background(), "gemini/gemini-4-neon", "gw-key", srv.URL, &LLMOptions{})
+	if err != nil {
+		t.Fatalf("NewAgentGateway error: %v", err)
+	}
+
+	req := &model.LLMRequest{Contents: []*genai.Content{
+		{Role: "user", Parts: []*genai.Part{{Text: "hello"}}},
+	}}
+	for resp, err := range llm.GenerateContent(context.Background(), req, false) {
+		if err != nil {
+			t.Fatalf("GenerateContent error: %v", err)
+		}
+		_ = resp
+	}
+
+	const want = "/v1beta/models/gemini%2Fgemini-4-neon:generateContent"
+	if gotEscapedPath != want {
+		t.Errorf("request path = %q, want %q: an unescaped slash makes the model a\n"+
+			"second path segment, which the gateway answers with an empty 404", gotEscapedPath, want)
+	}
+	if gotPath != "/v1beta/models/gemini/gemini-4-neon:generateContent" {
+		t.Errorf("decoded path = %q, want the %s decoded back to a slash", gotPath, "%2F")
+	}
+
+	// The user-facing name must stay exactly what was asked for: it labels the
+	// session and the TUI, and %2F there would be a second bug.
+	if llm.Name() != "gemini/gemini-4-neon" {
+		t.Errorf("Name() = %q, want the requested name unchanged", llm.Name())
+	}
+}
+
+// TestAgentGatewayGeminiUnlayeredNameIsUnchanged pins the no-op half: a bare
+// gemini-<id> route has no slash to escape, and must not be rewritten into
+// something the gateway cannot resolve. Without this, a fix that escaped every
+// name — or escaped the colon out of gemma4:e4b — would look correct above.
+func TestAgentGatewayGeminiUnlayeredNameIsUnchanged(t *testing.T) {
+	for _, name := range []string{"gemini-4-neon", "gemini-2.5-flash", "gemini-3.8-flash"} {
+		if got := geminiWireName(name); got != name {
+			t.Errorf("geminiWireName(%q) = %q, want it unchanged", name, got)
+		}
+	}
+}
+
+func TestGeminiWireName(t *testing.T) {
+	tests := []struct {
+		name  string
+		model string
+		want  string
+	}{
+		{name: "layered route escapes the slash", model: "gemini/gemini-4-neon", want: "gemini%2Fgemini-4-neon"},
+		{name: "unlayered id is untouched", model: "gemini-4-neon", want: "gemini-4-neon"},
+		{name: "a colon in the id survives", model: "gemma4:e4b", want: "gemma4:e4b"},
+		{name: "a query separator cannot start a query", model: "gemini/x?alt=json", want: "gemini%2Fx%3Falt=json"},
+		{name: "a fragment separator is escaped too", model: "gemini/x#y", want: "gemini%2Fx%23y"},
+		{name: "surrounding space is dropped", model: " gemini/gemini-4-neon ", want: "gemini%2Fgemini-4-neon"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := geminiWireName(tt.model); got != tt.want {
+				t.Errorf("geminiWireName(%q) = %q, want %q", tt.model, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestAgentGatewayGeminiWireNameHonorsRequestOverride pins that the escape
+// applies to the model the request is actually for, not the one the client was
+// built with.
+//
+// A BeforeModelCallback may set req.Model to retarget a single call, and the
+// genai SDK honors that override. An earlier version of the escaping wrapper
+// wrote the configured name unconditionally, which silently sent an overridden
+// request to the wrong model — a worse failure than the 404 it fixed, because
+// the answer would come back from a model nobody asked for.
+func TestAgentGatewayGeminiWireNameHonorsRequestOverride(t *testing.T) {
+	tests := []struct {
+		name         string
+		gatewayModel string
+		reqModel     string
+		want         string
+	}{
+		{
+			name:         "layered gateway route, bare override drops the escape",
+			gatewayModel: "gemini/gemini-4-neon",
+			reqModel:     "gemini-3.8-flash",
+			want:         "/v1beta/models/gemini-3.8-flash:generateContent",
+		},
+		{
+			name:         "bare gateway route, layered override gains the escape",
+			gatewayModel: "gemini-4-neon",
+			reqModel:     "gemini/gemini-3.8-flash",
+			want:         "/v1beta/models/gemini%2Fgemini-3.8-flash:generateContent",
+		},
+		{
+			name:         "an empty override falls back to the configured name",
+			gatewayModel: "gemini/gemini-4-neon",
+			reqModel:     "",
+			want:         "/v1beta/models/gemini%2Fgemini-4-neon:generateContent",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				got = r.URL.EscapedPath()
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"candidates": []map[string]any{{
+						"content": map[string]any{
+							"role":  "model",
+							"parts": []map[string]any{{"text": "hi"}},
+						},
+					}},
+				})
+			}))
+			defer srv.Close()
+
+			llm, err := NewAgentGateway(context.Background(), tt.gatewayModel, "gw-key", srv.URL, &LLMOptions{})
+			if err != nil {
+				t.Fatalf("NewAgentGateway error: %v", err)
+			}
+			req := &model.LLMRequest{
+				Model:    tt.reqModel,
+				Contents: []*genai.Content{{Role: "user", Parts: []*genai.Part{{Text: "hello"}}}},
+			}
+			for _, err := range llm.GenerateContent(context.Background(), req, false) {
+				if err != nil {
+					t.Fatalf("GenerateContent error: %v", err)
+				}
+			}
+			if got != tt.want {
+				t.Errorf("path = %q, want %q", got, tt.want)
+			}
+		})
+	}
 }

@@ -3,6 +3,8 @@ package provider
 import (
 	"context"
 	"fmt"
+	"iter"
+	"net/url"
 	"os"
 	"strings"
 
@@ -76,10 +78,13 @@ func NewAgentGateway(ctx context.Context, modelName, apiKey, baseURL string, opt
 //     refuses to build a client at all without some key, and the gateway
 //     replaces it before the request leaves for Google.
 //
-// The model name is passed through whole. Resolve has already stripped the
-// vendor segment — an agentgateway/gemini/gemini-2.5-flash model arrives here
-// as gemini-2.5-flash — and stripping again would eat a legitimate
-// vendor-namespaced id.
+// The model name is passed to the client whole. Resolve has already stripped
+// the outer agentgateway/ wrapper — an agentgateway/gemini/gemini-2.5-flash
+// model arrives here as gemini/gemini-2.5-flash — and stripping the remaining
+// vendor segment would eat a legitimate vendor-namespaced id.
+//
+// That remaining slash is escaped before it reaches the wire. See
+// geminiWireName for why the gateway needs it and why Name() must not carry it.
 func newAgentGatewayGemini(ctx context.Context, modelName, apiKey, baseURL string, opts *LLMOptions) (model.LLM, error) {
 	if apiKey == "" {
 		apiKey = os.Getenv("AGENTGATEWAY_API_KEY")
@@ -103,7 +108,81 @@ func newAgentGatewayGemini(ctx context.Context, modelName, apiKey, baseURL strin
 	if err != nil {
 		return nil, fmt.Errorf("creating agentgateway gemini client: %w", err)
 	}
-	return llm, nil
+	return gatewayGeminiWireName{inner: llm, modelName: modelName}, nil
+}
+
+// gatewayGeminiWireName rewrites the model name a Gemini request travels with,
+// and only on the wire.
+//
+// A layered gateway route — agentgateway/gemini/gemini-4-neon, the shape the
+// gateway's own pi-fast failover uses — reaches here as gemini/gemini-4-neon.
+// The gateway resolves that name on the OpenAI-compatible endpoint, where the
+// model is a JSON field, but NOT on the native one, where the SDK pastes it
+// into the URL path: /v1beta/models/gemini/gemini-4-neon:generateContent. The
+// genai SDK escapes nothing (createAPIURL → url.JoinPath), so the slash splits
+// the path and the gateway answers 404 with an empty body. Nothing in that
+// error names the model or the slash, which is what makes it worth fixing here
+// rather than leaving as a documented limitation.
+//
+// Percent-escaping the slash makes the path one segment again —
+// /v1beta/models/gemini%2Fgemini-4-neon:generateContent — which the gateway
+// routes and strips to gemini-4-neon. An unlayered name has no slash and is
+// left byte-for-byte unchanged, so this is a no-op for the common case.
+//
+// The rewrite is deliberately not applied to Name(). That string is user-facing
+// and goes into session metadata (agent.go's SetSessionModel) and the TUI's
+// model label; a %2F there would be a second, cosmetic bug. ADK builds every
+// request as LLMRequest{Model: f.Model.Name()} (base_flow.go), so escaping
+// inside NewGemini alone would be overwritten on the very next turn — hence a
+// per-request rewrite on the way through instead.
+type gatewayGeminiWireName struct {
+	inner     model.LLM
+	modelName string
+}
+
+var _ model.LLM = gatewayGeminiWireName{}
+
+func (m gatewayGeminiWireName) Name() string { return m.inner.Name() }
+
+// GenerateContent forwards to the wrapped model with the wire model name set.
+//
+// The name escaped is the one the request is actually for, not the one this
+// client was built with. Those differ whenever a BeforeModelCallback overrides
+// req.Model — a supported way to retarget a single call — and the SDK honors
+// the override, so escaping the configured name instead would silently send
+// the request to the wrong model. The configured name is only the fallback for
+// a request that names none, which is also the case the SDK falls back on.
+//
+// req is copied rather than mutated. ADK's request value is shared with the
+// flow that built it — the same pointer feeds tracing hooks and the transcript
+// — so writing the escaped name into it would leak %2F into places that should
+// show the name the user typed.
+func (m gatewayGeminiWireName) GenerateContent(ctx context.Context, req *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
+	if req == nil {
+		return m.inner.GenerateContent(ctx, req, stream)
+	}
+	requested := strings.TrimSpace(req.Model)
+	if requested == "" {
+		requested = m.modelName
+	}
+	wireName := geminiWireName(requested)
+	if wireName == req.Model || (req.Model == "" && wireName == m.modelName) {
+		return m.inner.GenerateContent(ctx, req, stream)
+	}
+	escaped := *req
+	escaped.Model = wireName
+	return m.inner.GenerateContent(ctx, &escaped, stream)
+}
+
+// geminiWireName percent-escapes the path-bearing characters of a Gemini model
+// name so the SDK's URL builder keeps it to a single path segment.
+//
+// url.PathEscape is the right tool rather than a manual slash replacement: it
+// escapes exactly the characters that would change the URL's structure (/ ? #)
+// and leaves the rest of the id — colons in gemma4:e4b, dashes, dots — alone.
+// Escaping more than that would rename models the gateway already serves.
+func geminiWireName(modelName string) string {
+	return url.PathEscape(strings.TrimSpace(modelName))
 }
 
 // GatewayRoutesToGemini reports whether an agentgateway model name resolves to
