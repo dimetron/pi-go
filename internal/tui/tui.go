@@ -218,6 +218,8 @@ type model struct {
 	// fetch). handleSearchPopupKey cannot return one, so the key dispatcher
 	// drains it with takePopupCmd.
 	popupCmd tea.Cmd
+	// modelListSeq numbers /model listings so a superseded result is dropped.
+	modelListSeq int
 	// providerModelsFor names the provider the provider-models popup lists,
 	// for its header.
 	providerModelsFor string

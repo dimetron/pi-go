@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -372,5 +373,76 @@ func TestProviderPopupsRender(t *testing.T) {
 	m.searchPopup.filterSearch()
 	if out := m.renderSearchPopup(60); !strings.Contains(out, "No matching models") {
 		t.Errorf("models no-match:\n%s", out)
+	}
+}
+
+// A listing result must not land on a state the user has moved on from.
+func TestProviderModelsResultDroppedWhenStale(t *testing.T) {
+	listed := map[string][]provider.ModelInfo{"openai": {{ID: "gpt-5"}}}
+	t.Run("superseded", func(t *testing.T) {
+		m, _, _ := modelSwitchModel(t, "gpt-5", "openai", listed)
+		_, first := m.handleModelCommand([]string{"switch"})
+		_, second := m.handleModelCommand([]string{"switch"})
+		runCmd(t, m, first)
+		if m.searchPopup != nil {
+			t.Fatal("superseded result opened the picker")
+		}
+		runCmd(t, m, second)
+		if m.searchPopup == nil {
+			t.Fatal("latest result did not open the picker")
+		}
+		if len(m.chatModel.Messages) != 0 {
+			t.Errorf("placeholders left behind: %+v", m.chatModel.Messages)
+		}
+	})
+	t.Run("run started", func(t *testing.T) {
+		m, _, _ := modelSwitchModel(t, "gpt-5", "openai", listed)
+		_, cmd := m.handleModelCommand([]string{"switch"})
+		m.running = true
+		runCmd(t, m, cmd)
+		if m.searchPopup != nil {
+			t.Fatal("picker opened over a running response")
+		}
+	})
+	t.Run("other popup open", func(t *testing.T) {
+		m, _, _ := modelSwitchModel(t, "gpt-5", "openai", listed)
+		_, cmd := m.handleModelCommand([]string{"switch"})
+		m.openSearchPopupItems(searchModeHistory, []SearchItem{{Text: "earlier prompt"}})
+		runCmd(t, m, cmd)
+		if m.searchPopup.mode != searchModeHistory {
+			t.Fatalf("result replaced the open popup: %s", m.searchPopup.mode)
+		}
+	})
+}
+
+// The result removes its own placeholder, not reasoning a run appended later.
+func TestProviderModelsRemovesOnlyItsPlaceholder(t *testing.T) {
+	m, _, _ := modelSwitchModel(t, "gpt-5", "openai", map[string][]provider.ModelInfo{"openai": {{ID: "gpt-5"}}})
+	_, cmd := m.handleModelCommand([]string{"switch"})
+	m.chatModel.Messages = append(m.chatModel.Messages, message{role: "thinking", content: "agent reasoning"})
+	runCmd(t, m, cmd)
+	if len(m.chatModel.Messages) != 1 || m.chatModel.Messages[0].content != "agent reasoning" {
+		t.Fatalf("messages = %+v", m.chatModel.Messages)
+	}
+}
+
+// The active model deep in a long list opens scrolled into view.
+func TestProviderModelsScrollsActiveIntoView(t *testing.T) {
+	var models []provider.ModelInfo
+	for i := range 80 {
+		models = append(models, provider.ModelInfo{ID: fmt.Sprintf("m-%02d", i)})
+	}
+	m, _, _ := modelSwitchModel(t, "m-70", "openai", map[string][]provider.ModelInfo{"openai": models})
+	_, cmd := m.handleModelCommand([]string{"switch"})
+	runCmd(t, m, cmd)
+	sp := m.searchPopup
+	if sp.filtered[sp.selected].Text != "m-70" {
+		t.Fatalf("selected %q", sp.filtered[sp.selected].Text)
+	}
+	if sp.selected < sp.scrollOff || sp.selected >= sp.scrollOff+sp.height {
+		t.Errorf("selected %d outside visible window [%d,%d)", sp.selected, sp.scrollOff, sp.scrollOff+sp.height)
+	}
+	if out := m.renderSearchPopup(60); !strings.Contains(out, "m-70") {
+		t.Errorf("active row not rendered:\n%s", out)
 	}
 }

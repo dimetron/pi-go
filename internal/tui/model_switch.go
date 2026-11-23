@@ -24,6 +24,12 @@ type providerModelsMsg struct {
 	// withRoles puts the configured roles ahead of the models, for bare
 	// /model.
 	withRoles bool
+	// seq identifies the request; a result whose seq is not the latest was
+	// superseded by another /model and is dropped.
+	seq int
+	// placeholder is the exact "Fetching..." text this request added, so the
+	// result removes its own line and not, say, a run's reasoning.
+	placeholder string
 }
 
 // takePopupCmd returns and clears the command a popup selection started.
@@ -115,18 +121,21 @@ func (m *model) startModelList(prov string, withRoles bool) tea.Cmd {
 		return nil
 	}
 
-	m.chatModel.Messages = append(m.chatModel.Messages, message{
-		role:    "thinking",
-		content: fmt.Sprintf("Fetching models from %s...", prov),
-	})
+	placeholder := fmt.Sprintf("Fetching models from %s...", prov)
+	m.chatModel.Messages = append(m.chatModel.Messages, message{role: "thinking", content: placeholder})
 	m.inputModel.Clear()
 
+	m.modelListSeq++
+	seq := m.modelListSeq
 	ctx, lister := m.ctx, m.cfg.ModelLister
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(ctx, providerModelListTimeout)
 		defer cancel()
 		models, err := lister(ctx, prov)
-		return providerModelsMsg{provider: prov, models: models, err: err, withRoles: withRoles}
+		return providerModelsMsg{
+			provider: prov, models: models, err: err,
+			withRoles: withRoles, seq: seq, placeholder: placeholder,
+		}
 	}
 }
 
@@ -134,9 +143,15 @@ func (m *model) startModelList(prov string, withRoles bool) tea.Cmd {
 // reports why there is nothing to pick.
 func (m *model) handleProviderModels(msg providerModelsMsg) (tea.Model, tea.Cmd) {
 	// The "Fetching..." placeholder is only a placeholder; drop it so the
-	// transcript keeps the outcome, not the wait.
-	if n := len(m.chatModel.Messages); n > 0 && m.chatModel.Messages[n-1].role == "thinking" {
-		m.chatModel.Messages = m.chatModel.Messages[:n-1]
+	// transcript keeps the outcome, not the wait. Match it exactly: a run may
+	// have started meanwhile and appended reasoning of its own.
+	m.removePlaceholder(msg.placeholder)
+
+	// The user moved on while the list was in flight: a newer /model
+	// superseded this one, a run started, or another popup is open. Opening
+	// the picker now would land on top of whatever they are doing.
+	if msg.seq != m.modelListSeq || m.running || m.searchPopup != nil {
+		return m, nil
 	}
 	var roles []SearchItem
 	if msg.withRoles {
@@ -170,11 +185,27 @@ func (m *model) handleProviderModels(msg providerModelsMsg) (tea.Model, tea.Cmd)
 	// Open on the model in use so the picker reads as "you are here".
 	for i, item := range m.searchPopup.entries {
 		if !item.Role && item.Text == current {
-			m.searchPopup.selected = i
+			sp := m.searchPopup
+			sp.selected = i
+			// Scroll so the selection is the bottom visible row; Enter must
+			// never accept a row the user cannot see.
+			sp.scrollOff = max(0, i-sp.height+1)
 			break
 		}
 	}
 	return m, nil
+}
+
+// removePlaceholder deletes the newest "thinking" line whose text is exactly
+// placeholder.
+func (m *model) removePlaceholder(placeholder string) {
+	msgs := m.chatModel.Messages
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].role == "thinking" && msgs[i].content == placeholder {
+			m.chatModel.Messages = append(msgs[:i], msgs[i+1:]...)
+			return
+		}
+	}
 }
 
 // providerModelSearchItems builds one row per model. The description carries

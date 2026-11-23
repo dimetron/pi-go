@@ -20,8 +20,12 @@ func TestRoutedModelNameKeepsListedIDThroughResolution(t *testing.T) {
 	}{
 		{"openai/gpt-5", "agentgateway", "openai/gpt-5", "agentgateway"},
 		{"anthropic/claude-3-opus", "agentgateway", "anthropic/claude-3-opus", "agentgateway"},
-		{"agentgateway/openai/gpt-5", "agentgateway", "openai/gpt-5", "agentgateway"},
 		{"anthropic/claude-sonnet-4.5", "openrouter", "anthropic/claude-sonnet-4.5", "openrouter"},
+		// OpenRouter's own namespace is part of the ID, not a routing prefix.
+		{"openrouter/auto", "openrouter", "openrouter/auto", "openrouter"},
+		// Names detection does not know are still the named provider's.
+		{"gemma-4-31b-it", "gemini", "gemma-4-31b-it", "gemini"},
+		{"llama3", "ollama", "llama3", "ollama"},
 		{"gpt-5", "openai", "gpt-5", "openai"},
 		{"claude-opus-4-7", "anthropic", "claude-opus-4-7", "anthropic"},
 		{"gemini-2.5-flash", "gemini", "gemini-2.5-flash", "gemini"},
@@ -37,6 +41,46 @@ func TestRoutedModelNameKeepsListedIDThroughResolution(t *testing.T) {
 				t.Errorf("got %s/%s, want %s/%s", info.Provider, info.Model, tc.wantProvider, tc.wantModel)
 			}
 		})
+	}
+}
+
+// An Ollama Cloud model listed under ollama must not be pinned to the local
+// daemon: routedModelName leaves ollama unprefixed for exactly this.
+func TestRoutedModelNameKeepsOllamaCloudOffLocalhost(t *testing.T) {
+	name := routedModelName("minimax-m3:cloud", "ollama")
+	if name != "minimax-m3:cloud" {
+		t.Fatalf("routedModelName = %q", name)
+	}
+	info, _, _, err := resolveSwitchedModel(config.Defaults(), name, "ollama")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.LocalOllama {
+		t.Errorf("cloud model resolved as local: %+v", info)
+	}
+}
+
+// A switched model is saved by switchedModelName and resolved again on
+// restart with the saved provider pinned; the ID must survive the trip.
+func TestSwitchedModelNameRoundTrips(t *testing.T) {
+	cfg := config.Defaults()
+	for _, tc := range []struct{ id, provider string }{
+		{"openai/gpt-5", "openrouter"},
+		{"openrouter/auto", "openrouter"},
+		{"openai/gpt-5", "agentgateway"},
+	} {
+		first, _, _, err := resolveSwitchedModel(cfg, routedModelName(tc.id, tc.provider), tc.provider)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.id, err)
+		}
+		saved := switchedModelName(first)
+		again, _, _, err := resolveSwitchedModel(cfg, saved, tc.provider)
+		if err != nil {
+			t.Fatalf("%s: restart resolve of %q: %v", tc.id, saved, err)
+		}
+		if again.Model != tc.id || again.Provider != tc.provider {
+			t.Errorf("%s on %s: restart got %s/%s via saved %q", tc.id, tc.provider, again.Provider, again.Model, saved)
+		}
 	}
 }
 
@@ -127,5 +171,12 @@ func TestApplyModelSwitchingWiresEveryHook(t *testing.T) {
 	_, name, prov, err := tc.ProviderModelSwitcher(context.Background(), "openai/gpt-5", "agentgateway")
 	if err != nil || prov != "agentgateway" || name != "agentgateway/openai/gpt-5" {
 		t.Errorf("ProviderModelSwitcher = %q on %q, %v", name, prov, err)
+	}
+}
+
+// With no provider named, an unknown name is still a resolution error.
+func TestResolveSwitchedModelUnknownWithoutProvider(t *testing.T) {
+	if _, _, _, err := resolveSwitchedModel(config.Defaults(), "gemma-4-31b-it", ""); err == nil {
+		t.Fatal("expected a resolution error without a provider")
 	}
 }

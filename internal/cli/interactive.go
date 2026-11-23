@@ -1112,7 +1112,7 @@ func applyModelSwitching(tc *tui.Config, cfg config.Config, tokenTracker *guardr
 		return buildSwitchedLLM(ctx, cfg, tokenTracker, modelName)
 	}
 	tc.ProviderModelSwitcher = func(ctx context.Context, modelName, providerName string) (adkmodel.LLM, string, string, error) {
-		return buildSwitchedLLMForProvider(ctx, cfg, tokenTracker, modelName, providerName)
+		return buildSwitchedLLMForProvider(ctx, cfg, tokenTracker, routedModelName(modelName, providerName), providerName)
 	}
 	tc.ModelLister = func(ctx context.Context, providerName string) ([]provider.ModelInfo, error) {
 		return listProviderModels(ctx, cfg, providerName)
@@ -1138,28 +1138,28 @@ func buildSwitchedLLMForProvider(ctx context.Context, cfg config.Config, tokenTr
 	rc := switchCfg.Roles["default"]
 	rc.Provider = providerName
 	switchCfg.Roles["default"] = rc
-	return buildSwitchedLLM(ctx, switchCfg, tokenTracker, routedModelName(modelName, providerName))
+	return buildSwitchedLLM(ctx, switchCfg, tokenTracker, modelName)
 }
 
 // routedModelPrefixes are the providers whose "<provider>/" prefix model
-// resolution strips. A listed ID is the provider's own name for the model, so
-// it has to keep every segment: agentgateway and openrouter serve IDs such as
-// "openai/gpt-5", which resolution would otherwise read as native OpenAI and
-// cut to "gpt-5" before the pin swaps the provider back.
-var routedModelPrefixes = []string{"agentgateway", "openrouter", "opencode", "ollama", "openai", "azure", "mistral", "anthropic", "fm"}
+// resolution strips exactly once. A listed ID is the provider's own name for
+// the model and must arrive with every segment: agentgateway and openrouter
+// serve IDs such as "openai/gpt-5" and "openrouter/auto", which resolution
+// would otherwise read as native OpenAI or cut to "auto".
+//
+// Ollama is left out on purpose: "ollama/" also asserts a local daemon, which
+// would pull an Ollama Cloud model off api.ollama.com.
+var routedModelPrefixes = []string{"agentgateway", "openrouter", "opencode", "openai", "azure", "mistral", "anthropic", "fm"}
 
-// routedModelName prefixes modelName with "<providerName>/" when resolution
-// knows that prefix and the name does not already carry it, so the provider
-// receives the ID verbatim.
+// routedModelName prefixes a listed model ID with "<providerName>/" so the
+// one strip resolution performs leaves the ID verbatim. It is for IDs taken
+// from that provider's own listing, which never carry the routing prefix; a
+// name typed by a user or sent by an RPC client goes through unchanged paths.
 func routedModelName(modelName, providerName string) string {
 	if !slices.Contains(routedModelPrefixes, providerName) {
 		return modelName
 	}
-	prefix := providerName + "/"
-	if strings.HasPrefix(strings.ToLower(modelName), prefix) {
-		return modelName
-	}
-	return prefix + modelName
+	return providerName + "/" + modelName
 }
 
 // listProviderModels lists the models one provider serves, for the TUI's
@@ -1193,7 +1193,14 @@ func resolveSwitchedModel(cfg config.Config, modelName, providerName string) (pr
 
 	info, err := provider.ResolveWithBaseURL(modelName, baseURL)
 	if err != nil {
-		return provider.Info{}, "", "", fmt.Errorf("resolving model: %w", err)
+		if providerName == "" {
+			return provider.Info{}, "", "", fmt.Errorf("resolving model: %w", err)
+		}
+		// The provider is named, so detecting it from the model name is not
+		// needed; a name detection does not know (gemma-4-31b-it on Gemini,
+		// llama3 on Ollama) is still the provider's to accept or reject, which
+		// ValidateModel checks against its catalog below.
+		info = provider.Info{Provider: providerName, Model: modelName, Ollama: providerName == "ollama"}
 	}
 	if providerName != "" {
 		info.Provider = providerName
@@ -1265,6 +1272,11 @@ func switchedModelName(info provider.Info) string {
 	}
 	if info.Provider == "agentgateway" {
 		return "agentgateway/" + info.Model
+	}
+	// openrouter/ for the same reason: its IDs are "<vendor>/<model>", and a
+	// saved "openai/gpt-5" would resolve as native OpenAI's "gpt-5" on restart.
+	if info.Provider == "openrouter" {
+		return "openrouter/" + info.Model
 	}
 	// fm/ too: "system" and "pcc" carry no provider hint on their own, so
 	// returning the bare name would re-resolve to "unknown model" on the next
