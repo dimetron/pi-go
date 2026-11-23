@@ -1,6 +1,6 @@
 {
   "provider": "openrouter",
-  "fetched_at": "2026-11-22T00:00:00Z",
+  "fetched_at": "2026-11-23T00:00:00Z",
   "models": [
     {
       "id": "amazon/nova-2-lite-v1",
@@ -267,10 +267,12 @@
       "release_date": "2026-11-12"
     },
     {
-      "id": "google/gemini-4-neon"
+      "id": "google/gemini-4-neon",
+      "release_date": "2026-11-18"
     },
     {
-      "id": "google/gemini-4-neon:batch"
+      "id": "google/gemini-4-neon:batch",
+      "release_date": "2026-11-18"
     },
     {
       "id": "google/gemini-nano-banana-2.1",
@@ -409,7 +411,8 @@
       "release_date": "2024-04-17"
     },
     {
-      "id": "mistralai/pixtral-large-2502"
+      "id": "mistralai/pixtral-large-2502",
+      "release_date": "2025-04-08"
     },
     {
       "id": "mistralai/voxtral-small-24b-2507",
@@ -703,28 +706,36 @@
       "release_date": "2026-10-26"
     },
     {
-      "id": "openai/gpt-6.2-astra"
+      "id": "openai/gpt-6.2-astra",
+      "release_date": "2026-11-17"
     },
     {
-      "id": "openai/gpt-6.2-astra-pro"
+      "id": "openai/gpt-6.2-astra-pro",
+      "release_date": "2026-11-17"
     },
     {
-      "id": "openai/gpt-6.2-astra-pro:batch"
+      "id": "openai/gpt-6.2-astra-pro:batch",
+      "release_date": "2026-11-17"
     },
     {
-      "id": "openai/gpt-6.2-astra:batch"
+      "id": "openai/gpt-6.2-astra:batch",
+      "release_date": "2026-11-17"
     },
     {
-      "id": "openai/gpt-6.2-sol"
+      "id": "openai/gpt-6.2-sol",
+      "release_date": "2026-11-17"
     },
     {
-      "id": "openai/gpt-6.2-sol-pro"
+      "id": "openai/gpt-6.2-sol-pro",
+      "release_date": "2026-11-17"
     },
     {
-      "id": "openai/gpt-6.2-sol-pro:batch"
+      "id": "openai/gpt-6.2-sol-pro:batch",
+      "release_date": "2026-11-17"
     },
     {
-      "id": "openai/gpt-6.2-sol:batch"
+      "id": "openai/gpt-6.2-sol:batch",
+      "release_date": "2026-11-17"
     },
     {
       "id": "openai/gpt-audio",
