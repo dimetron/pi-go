@@ -5,7 +5,7 @@ each provider currently serves is listed below. Prices are USD per 1M tokens
 (input/output), from the embedded models.dev snapshot; a `—` means the
 snapshot has no entry for that model.
 
-Last updated: 2026-11-22
+Last updated: 2026-11-23
 
 ## Providers
 
@@ -14,7 +14,7 @@ Last updated: 2026-11-22
 | [Anthropic](#anthropic) | 15 models | `ANTHROPIC_API_KEY` |
 | [OpenAI](#openai) | 89 models | `OPENAI_API_KEY` |
 | [Google Gemini](#google-gemini) | 47 models | `GEMINI_API_KEY` |
-| [Mistral](#mistral) | 36 models | `MISTRAL_API_KEY` |
+| [Mistral](#mistral) | 37 models | `MISTRAL_API_KEY` |
 | [xAI](#xai) | 7 models | `XAI_API_KEY` |
 | [Ollama](#ollama) | 18 models | local daemon; no key needed |
 | [OpenRouter](#openrouter) | 250 models | `OPENROUTER_API_KEY` |
@@ -145,8 +145,7 @@ API key: `OPENAI_API_KEY`.
 | tts-1-1106 | — | — |
 | tts-1-hd | — | — |
 | tts-1-hd-1106 | — | — |
-| whisper-1 | — | — |
-## Google Gemini — 47 models
+| whisper-1 | — | — |## Google Gemini — 47 models
 
 API key: `GEMINI_API_KEY`.
 
@@ -198,8 +197,7 @@ API key: `GEMINI_API_KEY`.
 | gemini-omni-flash-preview | — | — |
 | gemini-robotics-er-2-preview | — | — |
 | lyria-3.5 | — | — |
-| nano-banana-pro-preview | — | — |
-## Mistral — 36 models
+| nano-banana-pro-preview | — | — |## Mistral — 37 models
 
 API key: `MISTRAL_API_KEY`.
 
@@ -218,18 +216,19 @@ API key: `MISTRAL_API_KEY`.
 | mistral-small-2603 | 2026-03-16 | $0.15/$0.60 | 262K | completion_chat, function_calling, vision |
 | mistral-small-latest | 2026-03-16 | $0.15/$0.60 | 262K | completion_chat, function_calling, vision |
 | ministral-14b-2512 | 2025-12-02 | $0.20/$0.20 | 262K | completion_chat, function_calling, fine_tuning, vision |
+| ministral-14b-latest | 2025-12-02 | $0.20/$0.20 | 262K | completion_chat, function_calling, fine_tuning, vision |
 | ministral-3b-2512 | 2025-12-02 | $0.10/$0.10 | 131K | completion_chat, function_calling, fine_tuning, vision |
+| ministral-3b-latest | 2025-12-02 | $0.10/$0.10 | 131K | completion_chat, function_calling, fine_tuning, vision |
 | ministral-8b-2512 | 2025-12-02 | $0.15/$0.15 | 262K | completion_chat, function_calling, fine_tuning, vision |
+| ministral-8b-latest | 2025-12-02 | $0.15/$0.15 | 262K | completion_chat, function_calling, fine_tuning, vision |
+| mistral-large-2512 | 2025-12-02 | $0.50/$1.50 | 262K | completion_chat, function_calling, fine_tuning, vision |
 | codestral-2508 | 2025-07-30 | $0.30/$0.90 | 256K | completion_chat, completion_fim, function_calling |
 | voxtral-small-2507 | 2025-07-15 | $0.10/$0.40 | 32K | completion_chat, function_calling |
 | voxtral-small-latest | 2025-07-15 | $0.10/$0.40 | 32K | completion_chat, function_calling |
-| magistral-medium-latest | 2025-03-17 | $2.00/$5.00 | 262K | completion_chat, function_calling, vision |
-| mistral-large-2512 | 2024-11-01 | $0.50/$1.50 | 262K | completion_chat, function_calling, fine_tuning, vision |
-| ministral-3b-latest | 2024-10-01 | $0.10/$0.10 | 131K | completion_chat, function_calling, fine_tuning, vision |
-| ministral-8b-latest | 2024-10-01 | $0.15/$0.15 | 262K | completion_chat, function_calling, fine_tuning, vision |
+| magistral-medium-latest | 2025-03-17 | $1.50/$7.50 | 262K | completion_chat, function_calling, vision |
 | codestral-latest | 2024-05-29 | $0.30/$0.90 | 256K | completion_chat, completion_fim, function_calling |
+| glm-5-latest | — | — | 1.05M | completion_chat, function_calling |
 | magistral-small-latest | — | — | 262K | completion_chat, function_calling, vision |
-| ministral-14b-latest | — | — | 262K | completion_chat, function_calling, fine_tuning, vision |
 | mistral-code-fim-latest | — | — | 256K | completion_chat, completion_fim, function_calling |
 | mistral-code-latest | — | — | 256K | completion_chat, completion_fim, function_calling |
 | mistral-medium | — | — | 262K | completion_chat, function_calling, vision |
@@ -279,8 +278,7 @@ Local daemon, plus Ollama Cloud (`*:cloud` tags). No API key for local models.
 | qwen3.5:0.8b | — | 262K | completion, thinking, tools, vision |
 | tev1:4b | — | 2K | decision |
 | tev1:4b-mxfp8 | — | 2K | decision |
-| tev1:latest | — | 2K | decision |
-## OpenRouter — 250 models
+| tev1:latest | — | 2K | decision |## OpenRouter — 250 models
 
 API key: `OPENROUTER_API_KEY`.
 
@@ -309,9 +307,9 @@ API key: `OPENROUTER_API_KEY`.
 | openai/gpt-6.1-terra-pro | 2026-10-26 | $1.00/$5.00 |
 | openai/gpt-6.1-terra-pro:batch | 2026-10-26 | $1.00/$5.00 |
 | openai/gpt-6.1-terra:batch | 2026-10-26 | $1.00/$5.00 |
-| moonshotai/kimi-k3.1-pro | 2026-10-23 | $0.25/$8.80 |
+| moonshotai/kimi-k3.1-pro | 2026-10-23 | $0.24/$8.40 |
 | minimax/minimax-m3.1-flash | 2026-10-19 | $0.14/$0.54 |
-| deepseek/deepseek-v4.1-flash-1017 | 2026-10-17 | $0.15/$0.60 |
+| deepseek/deepseek-v4.1-flash-1017 | 2026-10-17 | $0.03/$0.20 |
 | meta/muse-spark-open | 2026-10-15 | $1.25/$4.25 |
 | google/gemini-4-argon | 2026-10-13 | $2.00/$10.00 |
 | google/gemini-4-argon:batch | 2026-10-13 | $2.00/$10.00 |
@@ -340,7 +338,7 @@ API key: `OPENROUTER_API_KEY`.
 | x-ai/grok-4.7 | 2026-09-21 | $2.00/$6.00 |
 | x-ai/grok-4.7:batch | 2026-09-21 | $2.00/$6.00 |
 | z-ai/glm-5.3-flashx | 2026-09-18 | $0.37/$1.25 |
-| ~deepseek/deepseek-flash-latest | 2026-09-14 | $0.04/$0.50 |
+| ~deepseek/deepseek-flash-latest | 2026-09-14 | $0.03/$0.20 |
 | ~openai/gpt-astra-latest | 2026-09-11 | $8.00/$40.00 |
 | ~openai/gpt-luna-latest | 2026-09-11 | $0.10/$0.50 |
 | ~openai/gpt-sol-latest | 2026-09-11 | $2.00/$10.00 |
@@ -356,10 +354,10 @@ API key: `OPENROUTER_API_KEY`.
 | anthropic/claude-fable-5.1 | 2026-09-01 | $10.00/$50.00 |
 | anthropic/claude-fable-5.1:batch | 2026-09-01 | $10.00/$50.00 |
 | google/gemini-omni-1.1-flash | 2026-08-27 | $1.50/$9.00 |
-| ~z-ai/glm-flash-latest | 2026-08-27 | $0.04/$0.08 |
-| z-ai/glm-5.3-flash | 2026-08-26 | $0.04/$0.08 |
+| ~z-ai/glm-flash-latest | 2026-08-27 | $0.04/$0.07 |
+| z-ai/glm-5.3-flash | 2026-08-26 | $0.04/$0.07 |
 | ~z-ai/glm-latest | 2026-08-19 | $0.07/$1.40 |
-| qwen/qwen3.8-27b | 2026-08-14 | $0.06/$1.96 |
+| qwen/qwen3.8-27b | 2026-08-14 | $0.04/$1.50 |
 | z-ai/glm-5.3 | 2026-08-14 | $0.07/$1.40 |
 | google/gemini-3.7-flash | 2026-08-13 | $0.75/$3.75 |
 | google/gemini-3.7-flash:batch | 2026-08-13 | $0.75/$3.75 |
@@ -367,7 +365,7 @@ API key: `OPENROUTER_API_KEY`.
 | x-ai/grok-4.6 | 2026-08-12 | $2.00/$6.00 |
 | x-ai/grok-4.6:batch | 2026-08-12 | $2.00/$6.00 |
 | nvidia/nemotron-3.5-lightning | 2026-08-11 | $0.07/$0.20 |
-| ~deepseek/deepseek-v4-flash-latest | 2026-08-01 | $0.04/$0.13 |
+| ~deepseek/deepseek-v4-flash-latest | 2026-08-01 | $0.04/$0.30 |
 | anthropic/claude-opus-5 | 2026-07-24 | $5.00/$25.00 |
 | anthropic/claude-opus-5:batch | 2026-07-24 | $5.00/$25.00 |
 | google/gemini-3.5-flash-lite | 2026-07-21 | $0.30/$2.50 |
@@ -420,8 +418,8 @@ API key: `OPENROUTER_API_KEY`.
 | x-ai/grok-4.3 | 2026-04-17 | $1.25/$2.50 |
 | x-ai/grok-4.3:batch | 2026-04-17 | $1.25/$2.50 |
 | anthropic/claude-opus-4.7 | 2026-04-16 | $5.00/$25.00 |
-| z-ai/glm-5.1 | 2026-04-07 | $1.19/$3.74 |
-| google/gemma-4-26b-a4b-it | 2026-04-02 | $0.07/$0.23 |
+| z-ai/glm-5.1 | 2026-04-07 | $1.40/$4.40 |
+| google/gemma-4-26b-a4b-it | 2026-04-02 | $0.09/$0.30 |
 | google/gemma-4-26b-a4b-it:free | 2026-04-02 | $—/$— |
 | google/gemma-4-31b-it:free | 2026-04-02 | $—/$— |
 | z-ai/glm-5v-turbo | 2026-04-01 | $1.20/$4.00 |
@@ -447,7 +445,7 @@ API key: `OPENROUTER_API_KEY`.
 | openai/gpt-5.3-codex | 2026-02-05 | $1.75/$14.00 |
 | openrouter/free | 2026-02-01 | $—/$— |
 | moonshotai/kimi-k2.5 | 2026-01-27 | $0.50/$2.50 |
-| z-ai/glm-4.7 | 2025-12-22 | $0.40/$1.75 |
+| z-ai/glm-4.7 | 2025-12-22 | $0.60/$2.20 |
 | google/gemini-3-flash-preview | 2025-12-17 | $0.50/$3.00 |
 | google/gemini-3-flash-preview:batch | 2025-12-17 | $0.50/$3.00 |
 | openai/gpt-5.2 | 2025-12-11 | $1.75/$14.00 |
@@ -484,8 +482,8 @@ API key: `OPENROUTER_API_KEY`.
 | openai/gpt-5-nano | 2025-08-07 | $0.05/$0.40 |
 | openai/gpt-5-nano:batch | 2025-08-07 | $0.05/$0.40 |
 | anthropic/claude-opus-4.1 | 2025-08-05 | $15.00/$75.00 |
-| openai/gpt-oss-120b | 2025-08-05 | $0.09/$0.36 |
-| openai/gpt-oss-20b | 2025-08-05 | $0.02/$0.09 |
+| openai/gpt-oss-120b | 2025-08-05 | $0.05/$0.25 |
+| openai/gpt-oss-20b | 2025-08-05 | $0.03/$0.13 |
 | qwen/qwen3-coder-30b-a3b-instruct | 2025-07-31 | $0.07/$0.28 |
 | mistralai/codestral-2508 | 2025-07-30 | $0.30/$0.90 |
 | z-ai/glm-4.5 | 2025-07-28 | $0.60/$2.20 |

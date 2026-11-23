@@ -1,6 +1,6 @@
 {
   "provider": "mistral",
-  "fetched_at": "2026-11-22T00:00:00Z",
+  "fetched_at": "2026-11-23T00:00:00Z",
   "models": [
     {
       "id": "codestral-2508",
@@ -39,6 +39,15 @@
       "id": "glm-5-2",
       "owned_by": "mistralai",
       "release_date": "2026-06-13",
+      "context_window": 1048576,
+      "capabilities": [
+        "completion_chat",
+        "function_calling"
+      ]
+    },
+    {
+      "id": "glm-5-latest",
+      "owned_by": "mistralai",
       "context_window": 1048576,
       "capabilities": [
         "completion_chat",
