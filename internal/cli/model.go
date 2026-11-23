@@ -207,17 +207,7 @@ func selectModelListProviders(out io.Writer, args []string, keys, baseURLs map[s
 		}
 	}
 
-	// Query all providers that have credentials or a base URL configured.
-	var providers []string
-	for _, p := range allProviders {
-		if p == "ollama" {
-			providers = append(providers, p)
-			continue
-		}
-		if keys[p] != "" || baseURLs[p] != "" || flagURL != "" {
-			providers = append(providers, p)
-		}
-	}
+	providers := configuredListProviders(keys, baseURLs)
 	// Azure is not in allProviders because it has nothing to query, but a
 	// configured Azure user asking for "every provider" should still see
 	// their deployments rather than have them silently omitted. In JSON
@@ -230,6 +220,19 @@ func selectModelListProviders(out io.Writer, args []string, keys, baseURLs map[s
 		return nil, fmt.Errorf("no providers configured; set an API key (e.g. OPENAI_API_KEY) or specify a provider: pi model list <provider>")
 	}
 	return providers, nil
+}
+
+// configuredListProviders returns the providers with credentials or a base URL
+// configured, in allProviders order. Ollama is always included: it is a local
+// daemon that needs neither.
+func configuredListProviders(keys, baseURLs map[string]string) []string {
+	var providers []string
+	for _, p := range allProviders {
+		if p == "ollama" || keys[p] != "" || baseURLs[p] != "" || flagURL != "" {
+			providers = append(providers, p)
+		}
+	}
+	return providers
 }
 
 // modelListBaseURL resolves the endpoint to query: --url flag > env var >
@@ -252,18 +255,23 @@ func modelListBaseURL(providerName string, baseURLs map[string]string) string {
 	return baseURL
 }
 
-// printProviderModels renders one provider's catalog as a markdown table,
-// sorted by release date (newest first), then by model ID for models without a
-// date.
-func printProviderModels(providerName string, models []provider.ModelInfo) {
-	// Sort by release date descending (latest on top); models with no date
-	// (empty string) sort last, and equal dates fall back to ID order.
+// sortModelsNewestFirst sorts by release date descending (latest on top);
+// models with no date (empty string) sort last, and equal dates fall back to ID
+// order.
+func sortModelsNewestFirst(models []provider.ModelInfo) {
 	sort.Slice(models, func(i, j int) bool {
 		if models[i].ReleaseDate != models[j].ReleaseDate {
 			return models[i].ReleaseDate > models[j].ReleaseDate
 		}
 		return models[i].ID < models[j].ID
 	})
+}
+
+// printProviderModels renders one provider's catalog as a markdown table,
+// sorted by release date (newest first), then by model ID for models without a
+// date.
+func printProviderModels(providerName string, models []provider.ModelInfo) {
+	sortModelsNewestFirst(models)
 
 	// mistral, agentgateway and ollama carry a context window and capabilities;
 	// the other providers carry an owner (or nothing). Build a uniform table
