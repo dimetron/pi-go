@@ -174,7 +174,7 @@ func runInteractive(
 		deferredInit(initCtx, cfg, llm, info.Provider, info.Model, info.BaseURL, tokenTracker, cwd, sandboxRoot, worktreeDir, initCh, noticeCh, &res)
 	}()
 
-	tuiErr := tui.Run(ctx, tui.Config{
+	tuiCfg := tui.Config{
 		PlanAutoFix:    planAutoFixEnabled(cfg),
 		LLM:            llm,
 		AppVersion:     versionString(),
@@ -189,20 +189,10 @@ func runInteractive(
 		LifecycleHooks: convertHooks(cfg.Hooks),
 		DeferredInit:   initCh,
 		SystemNoticeCh: noticeCh,
-		ModelSwitcher: func(switchCtx context.Context, modelName string) (adkmodel.LLM, string, string, error) {
-			return buildSwitchedLLM(switchCtx, cfg, tokenTracker, modelName)
-		},
-		ProviderModelSwitcher: func(switchCtx context.Context, modelName, providerName string) (adkmodel.LLM, string, string, error) {
-			return buildSwitchedLLMForProvider(switchCtx, cfg, tokenTracker, modelName, providerName)
-		},
-		ModelLister: func(listCtx context.Context, providerName string) ([]provider.ModelInfo, error) {
-			return listProviderModels(listCtx, cfg, providerName)
-		},
-		ModelProviders: func() []string {
-			return configuredListProviders(config.APIKeys(), cfg.ResolveBaseURLs())
-		},
-		A2A: cfg.A2A,
-	})
+		A2A:            cfg.A2A,
+	}
+	applyModelSwitching(&tuiCfg, cfg, tokenTracker)
+	tuiErr := tui.Run(ctx, tuiCfg)
 
 	initCancel() // signal deferred init to stop
 	<-initDone
@@ -1112,6 +1102,24 @@ func buildSwitchedLLM(ctx context.Context, cfg config.Config, tokenTracker *guar
 	llm = guardrail.WrapModel(llm, tokenTracker)
 
 	return llm, switchedModelName(info), info.Provider, nil
+}
+
+// applyModelSwitching wires the TUI's /model hooks to this process's config
+// and token tracker: switching by name, switching on a named provider, listing
+// a provider's models, and the providers worth listing.
+func applyModelSwitching(tc *tui.Config, cfg config.Config, tokenTracker *guardrail.Tracker) {
+	tc.ModelSwitcher = func(ctx context.Context, modelName string) (adkmodel.LLM, string, string, error) {
+		return buildSwitchedLLM(ctx, cfg, tokenTracker, modelName)
+	}
+	tc.ProviderModelSwitcher = func(ctx context.Context, modelName, providerName string) (adkmodel.LLM, string, string, error) {
+		return buildSwitchedLLMForProvider(ctx, cfg, tokenTracker, modelName, providerName)
+	}
+	tc.ModelLister = func(ctx context.Context, providerName string) ([]provider.ModelInfo, error) {
+		return listProviderModels(ctx, cfg, providerName)
+	}
+	tc.ModelProviders = func() []string {
+		return configuredListProviders(config.APIKeys(), cfg.ResolveBaseURLs())
+	}
 }
 
 // buildSwitchedLLMForProvider is buildSwitchedLLM with the provider named by

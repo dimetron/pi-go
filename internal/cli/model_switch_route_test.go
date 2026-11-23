@@ -1,9 +1,15 @@
 package cli
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"slices"
 	"testing"
 
 	"github.com/dimetron/pi-go/internal/config"
+	"github.com/dimetron/pi-go/internal/guardrail"
+	"github.com/dimetron/pi-go/internal/tui"
 )
 
 // A model listed by a routing provider must reach it with every segment: the
@@ -55,5 +61,71 @@ func TestConfiguredListProvidersIncludesOllamaAndKeyed(t *testing.T) {
 		if !want[p] {
 			t.Errorf("unexpected provider %q in %v", p, got)
 		}
+	}
+}
+
+// gatewayStub serves a /v1/models payload in agentgateway's shape and points
+// flagURL at it for the test.
+func gatewayStub(t *testing.T, body string) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	orig := flagURL
+	flagURL = srv.URL
+	t.Cleanup(func() { flagURL = orig })
+}
+
+func TestListProviderModelsSortsNewestFirst(t *testing.T) {
+	gatewayStub(t, `{"data":[{"id":"zeta/b"},{"id":"alpha/a","context_window":1000}]}`)
+	models, err := listProviderModels(context.Background(), config.Defaults(), "agentgateway")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(models) != 2 || models[0].ID != "alpha/a" || models[1].ID != "zeta/b" {
+		t.Fatalf("models = %+v", models)
+	}
+	if models[0].ContextWindow != 1000 {
+		t.Errorf("context window dropped: %+v", models[0])
+	}
+}
+
+func TestListProviderModelsReportsProviderError(t *testing.T) {
+	gatewayStub(t, `not json`)
+	if _, err := listProviderModels(context.Background(), config.Defaults(), "agentgateway"); err == nil {
+		t.Fatal("expected an error for a malformed listing")
+	}
+}
+
+func TestApplyModelSwitchingWiresEveryHook(t *testing.T) {
+	gatewayStub(t, `{"data":[{"id":"openai/gpt-5"}]}`)
+	var tc tui.Config
+	applyModelSwitching(&tc, config.Defaults(), guardrail.New(0))
+	if tc.ModelSwitcher == nil || tc.ProviderModelSwitcher == nil || tc.ModelLister == nil || tc.ModelProviders == nil {
+		t.Fatalf("hooks not all set: %+v", tc)
+	}
+
+	models, err := tc.ModelLister(context.Background(), "agentgateway")
+	if err != nil || len(models) != 1 || models[0].ID != "openai/gpt-5" {
+		t.Fatalf("lister = %+v, %v", models, err)
+	}
+	// flagURL counts as configuration for every provider, so all are offered.
+	if provs := tc.ModelProviders(); !slices.Contains(provs, "agentgateway") {
+		t.Errorf("providers = %v", provs)
+	}
+	// A custom endpoint accepts any name, and building the LLM makes no call,
+	// so both switchers can be driven end to end against the stub.
+	if _, name, _, err := tc.ModelSwitcher(context.Background(), "agentgateway/openai/gpt-5"); err != nil || name != "agentgateway/openai/gpt-5" {
+		t.Errorf("ModelSwitcher = %q, %v", name, err)
+	}
+	_, name, prov, err := tc.ProviderModelSwitcher(context.Background(), "openai/gpt-5", "agentgateway")
+	if err != nil || prov != "agentgateway" || name != "agentgateway/openai/gpt-5" {
+		t.Errorf("ProviderModelSwitcher = %q on %q, %v", name, prov, err)
 	}
 }

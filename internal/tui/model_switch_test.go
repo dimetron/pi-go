@@ -305,3 +305,72 @@ func TestBareModelFallsBackToRolesOnListError(t *testing.T) {
 		t.Errorf("msg = %q", lastContent(m))
 	}
 }
+
+func TestProviderSearchItemsAddsUnlistedCurrentFirst(t *testing.T) {
+	items := providerSearchItems([]string{"openai", "ollama", "openai"}, "fm")
+	got := make([]string, len(items))
+	for i, it := range items {
+		got[i] = it.Text
+	}
+	if strings.Join(got, ",") != "fm,ollama,openai" || items[0].Description != "current" {
+		t.Fatalf("rows = %v (%+v)", got, items[0])
+	}
+}
+
+func TestProviderModelSearchItemsDescriptions(t *testing.T) {
+	items := providerModelSearchItems("p", []provider.ModelInfo{
+		{ID: ""},
+		{ID: "a", DisplayName: "a"},
+		{ID: "b", ContextWindow: 8000},
+		{ID: "c", MaxInputTokens: 4000, ContextWindow: 8000, DisplayName: "C"},
+	}, "b")
+	if len(items) != 3 {
+		t.Fatalf("empty ID not skipped: %+v", items)
+	}
+	want := []string{"", "8.0k ctx · active", "C · 4.0k ctx"}
+	for i, it := range items {
+		if it.Description != want[i] || it.Provider != "p" {
+			t.Errorf("row %d = %+v, want description %q", i, it, want[i])
+		}
+	}
+}
+
+func TestSwitchModelOnProviderGuards(t *testing.T) {
+	m, calls, _ := modelSwitchModel(t, "gpt-5", "openai", nil)
+	m.running = true
+	m.switchModelOnProvider("gpt-4o", "openai")
+	if len(*calls) != 0 || !strings.Contains(lastContent(m), "while a response is running") {
+		t.Errorf("running: calls=%v msg=%q", *calls, lastContent(m))
+	}
+	m.running = false
+	m.cfg.ProviderModelSwitcher = nil
+	m.switchModelOnProvider("gpt-4o", "openai")
+	if !strings.Contains(lastContent(m), "not available") {
+		t.Errorf("nil switcher: msg=%q", lastContent(m))
+	}
+}
+
+func TestProviderPopupsRender(t *testing.T) {
+	m, _, _ := modelSwitchModel(t, "gpt-5", "openai", map[string][]provider.ModelInfo{"openai": {{ID: "gpt-5"}}})
+	m.handleModelCommand([]string{"provider"})
+	if out := m.renderSearchPopup(60); !strings.Contains(out, "Providers") || !strings.Contains(out, "openai") {
+		t.Errorf("providers popup:\n%s", out)
+	}
+	m.searchPopup.search = "zzz"
+	m.searchPopup.filterSearch()
+	if out := m.renderSearchPopup(60); !strings.Contains(out, "No matching providers") {
+		t.Errorf("providers no-match:\n%s", out)
+	}
+
+	m.searchPopup = nil
+	_, cmd := m.handleModelCommand([]string{"switch"})
+	runCmd(t, m, cmd)
+	if out := m.renderSearchPopup(60); !strings.Contains(out, "Models · openai") || !strings.Contains(out, "gpt-5") {
+		t.Errorf("models popup:\n%s", out)
+	}
+	m.searchPopup.search = "zzz"
+	m.searchPopup.filterSearch()
+	if out := m.renderSearchPopup(60); !strings.Contains(out, "No matching models") {
+		t.Errorf("models no-match:\n%s", out)
+	}
+}
