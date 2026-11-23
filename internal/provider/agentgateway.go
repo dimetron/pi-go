@@ -146,6 +146,13 @@ func (m gatewayGeminiWireName) Name() string { return m.inner.Name() }
 
 // GenerateContent forwards to the wrapped model with the wire model name set.
 //
+// The name escaped is the one the request is actually for, not the one this
+// client was built with. Those differ whenever a BeforeModelCallback overrides
+// req.Model — a supported way to retarget a single call — and the SDK honors
+// the override, so escaping the configured name instead would silently send
+// the request to the wrong model. The configured name is only the fallback for
+// a request that names none, which is also the case the SDK falls back on.
+//
 // req is copied rather than mutated. ADK's request value is shared with the
 // flow that built it — the same pointer feeds tracing hooks and the transcript
 // — so writing the escaped name into it would leak %2F into places that should
@@ -154,8 +161,12 @@ func (m gatewayGeminiWireName) GenerateContent(ctx context.Context, req *model.L
 	if req == nil {
 		return m.inner.GenerateContent(ctx, req, stream)
 	}
-	wireName := geminiWireName(m.modelName)
-	if wireName == m.modelName {
+	requested := strings.TrimSpace(req.Model)
+	if requested == "" {
+		requested = m.modelName
+	}
+	wireName := geminiWireName(requested)
+	if wireName == req.Model || (req.Model == "" && wireName == m.modelName) {
 		return m.inner.GenerateContent(ctx, req, stream)
 	}
 	escaped := *req

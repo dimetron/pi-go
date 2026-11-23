@@ -558,3 +558,75 @@ func TestGeminiWireName(t *testing.T) {
 		})
 	}
 }
+
+// TestAgentGatewayGeminiWireNameHonorsRequestOverride pins that the escape
+// applies to the model the request is actually for, not the one the client was
+// built with.
+//
+// A BeforeModelCallback may set req.Model to retarget a single call, and the
+// genai SDK honors that override. An earlier version of the escaping wrapper
+// wrote the configured name unconditionally, which silently sent an overridden
+// request to the wrong model — a worse failure than the 404 it fixed, because
+// the answer would come back from a model nobody asked for.
+func TestAgentGatewayGeminiWireNameHonorsRequestOverride(t *testing.T) {
+	tests := []struct {
+		name         string
+		gatewayModel string
+		reqModel     string
+		want         string
+	}{
+		{
+			name:         "layered gateway route, bare override drops the escape",
+			gatewayModel: "gemini/gemini-4-neon",
+			reqModel:     "gemini-3.8-flash",
+			want:         "/v1beta/models/gemini-3.8-flash:generateContent",
+		},
+		{
+			name:         "bare gateway route, layered override gains the escape",
+			gatewayModel: "gemini-4-neon",
+			reqModel:     "gemini/gemini-3.8-flash",
+			want:         "/v1beta/models/gemini%2Fgemini-3.8-flash:generateContent",
+		},
+		{
+			name:         "an empty override falls back to the configured name",
+			gatewayModel: "gemini/gemini-4-neon",
+			reqModel:     "",
+			want:         "/v1beta/models/gemini%2Fgemini-4-neon:generateContent",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				got = r.URL.EscapedPath()
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"candidates": []map[string]any{{
+						"content": map[string]any{
+							"role":  "model",
+							"parts": []map[string]any{{"text": "hi"}},
+						},
+					}},
+				})
+			}))
+			defer srv.Close()
+
+			llm, err := NewAgentGateway(context.Background(), tt.gatewayModel, "gw-key", srv.URL, &LLMOptions{})
+			if err != nil {
+				t.Fatalf("NewAgentGateway error: %v", err)
+			}
+			req := &model.LLMRequest{
+				Model:    tt.reqModel,
+				Contents: []*genai.Content{{Role: "user", Parts: []*genai.Part{{Text: "hello"}}}},
+			}
+			for _, err := range llm.GenerateContent(context.Background(), req, false) {
+				if err != nil {
+					t.Fatalf("GenerateContent error: %v", err)
+				}
+			}
+			if got != tt.want {
+				t.Errorf("path = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
